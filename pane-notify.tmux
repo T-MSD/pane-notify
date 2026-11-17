@@ -11,7 +11,7 @@
 #   @pane-notify-key                          prefix key for the sidebar (a); off = none
 #   @pane-notify-auto-format                  on = add the badge and bell to the
 #                                             status formats (on)
-#   @pane-notify-sidebar                      on | off (record sidebar entries)
+#   @pane-notify-sidebar                      on | off (off = no sidebar)
 #   @pane-notify-bar-max                      notifications listed at once (10)
 #   @pane-notify-sidebar-width                sidebar columns (30, at most a third of the window)
 #   @pane-notify-desktop                      unfocused | always | off
@@ -78,12 +78,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 key="$(get_opt @pane-notify-key a)"
 [ "$key" = off ] || tmux bind-key "$key" run-shell -b "'$here/scripts/notify.sh' sidebar-toggle '#{client_name}'"
 
-clear="if-shell -F '#{session_attached}' 'set-option -wu @pane_notify'"
-for hook in session-window-changed client-session-changed pane-focus-in; do
-  tmux set-hook -g "${hook}[77]" "$clear"
-done
-
-follow="if-shell -F '#{?#{@pane_notify_busy},,#{@pane_notify_bar_active}}' { run-shell -b \"'$here/scripts/notify.sh' bar-refresh\" }"
+follow="if-shell -F '#{?#{@pane_notify_busy},,#{@pane_notify_count}}' { run-shell -b \"'$here/scripts/notify.sh' bar-refresh\" }"
 for hook in session-window-changed client-session-changed client-focus-in window-unlinked after-resize-pane \
             pane-exited after-kill-pane; do
   tmux set-hook -g "${hook}[78]" "$follow" 2>/dev/null

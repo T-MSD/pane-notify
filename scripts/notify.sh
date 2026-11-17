@@ -81,53 +81,91 @@ sgr() {
 
 colour_of() { tmux display-message -p "$(opt "$1" "$2")"; }
 
-entry_names() {
-  tmux show-options -g | awk -v p="$ENTRY_PREFIX" 'index($1, p) == 1 { print $1 }' \
-    | sort -t_ -k4,4nr
+# Entries are the only record of unseen notifications; each window's badge
+# (@pane_notify) and the bell (@pane_notify_count) are derived from them.
+#   entries_add <state> <where> <label> <detail> <window>
+#   entries_drop <entry-id | window-id>
+#   entries_prune    drop what is in view, gone or beyond bar-max, update the
+#                    badges and the bell, print how many entries are left
+#   entries_each <fn>
+#                    call fn id state where label detail window, newest first
+
+entry_ids() {
+  tmux show-options -g | awk -v p="$ENTRY_PREFIX" 'index($1, p) == 1 { print substr($1, length(p) + 1) }' \
+    | sort -nr
 }
 
-drop_entries_for() {
-  local name target
-  for name in $(entry_names); do
-    target="$(tmux show-option -gqv "$name")"
-    [ "${target##*"$SEP"}" = "$1" ] && tmux set-option -gu "$name"
+entries_each() {
+  local id v state where label detail
+  for id in $(entry_ids); do
+    v="$(tmux show-option -gqv "$ENTRY_PREFIX$id")"
+    [ -n "$v" ] || continue
+    state=${v%%"$SEP"*}; v=${v#*"$SEP"}
+    where=${v%%"$SEP"*}; v=${v#*"$SEP"}
+    label=${v%%"$SEP"*}; v=${v#*"$SEP"}
+    detail=${v%%"$SEP"*}
+    "$1" "$id" "$state" "$where" "$label" "$detail" "${v#*"$SEP"}"
   done
+  return 0
 }
 
-add_entry() {
-  local state=$1 where=$2 label=$3 detail=$4 win=$5 seq
-  drop_entries_for "$win"
+entries_add() {
+  local seq
+  entries_drop "$5"
   seq=$(( $(opt @pane_notify_seq 0) + 1 ))
-  tmux set-option -g @pane_notify_seq "$seq"
-  tmux set-option -g "${ENTRY_PREFIX}${seq}" "${state}${SEP}${where}${SEP}${label}${SEP}${detail}${SEP}${win}"
+  tmux set-option -g @pane_notify_seq "$seq" \; set-option -g "$ENTRY_PREFIX$seq" "$1$SEP$2$SEP$3$SEP$4$SEP$5"
 }
 
-split_entry() {
-  local v=$1
-  E_STATE=${v%%"$SEP"*}; v=${v#*"$SEP"}
-  E_WHERE=${v%%"$SEP"*}; v=${v#*"$SEP"}
-  E_LABEL=${v%%"$SEP"*}; v=${v#*"$SEP"}
-  E_DETAIL=${v%%"$SEP"*}
-  E_TARGET=${v#*"$SEP"}
+entries_drop() {
+  local drop_window
+  case $1 in
+    @*) drop_window=$1; entries_each drop_if_window ;;
+    *) tmux set-option -gu "$ENTRY_PREFIX$1" 2>/dev/null ;;
+  esac
 }
 
-list_entries() {
-  local prune=${1:-} max in_view windows name value target n=0
+drop_if_window() {
+  [ "$6" != "$drop_window" ] || tmux set-option -gu "$ENTRY_PREFIX$1"
+}
+
+entries_prune() {
+  local max in_view windows kept=0 badges=" " win badge want client
+  local -a cmds=()
   max="$(opt @pane-notify-bar-max 10)"
-  if [ -n "$prune" ]; then
-    in_view=" $(windows_in_view | tr '\n' ' ') "
-    windows=" $(tmux list-windows -a -F '#{window_id}' | tr '\n' ' ') "
-  fi
-  for name in $(entry_names); do
-    value="$(tmux show-option -gqv "$name")"
-    target=${value##*"$SEP"}
-    if [ -n "$prune" ] && { [ "$n" -ge "$max" ] || [[ $in_view == *" $target "* ]] || [[ $windows != *" $target "* ]]; }; then
-      tmux set-option -gu "$name"
-      continue
+  in_view=" $(windows_in_view | tr '\n' ' ') "
+  windows="$(tmux list-windows -a -F '#{window_id} #{@pane_notify}' | sort -u)"
+  entries_each prune_entry
+
+  while read -r win badge; do
+    [ -n "$win" ] || continue
+    want=""
+    case $badges in *" $win="*) want=${badges#*" $win="}; want=${want%% *} ;; esac
+    [ "$want" = "$badge" ] && continue
+    if [ -n "$want" ]; then
+      cmds+=(\; set-option -w -t "$win" @pane_notify "$want")
+    else
+      cmds+=(\; set-option -wu -t "$win" @pane_notify)
     fi
-    printf '%s %s\n' "$name" "$value"
-    n=$((n + 1))
-  done
+  done <<<"$windows"
+  if [ "$kept" -gt 0 ]; then
+    cmds+=(\; set-option -g @pane_notify_count "$kept")
+  else
+    cmds+=(\; set-option -gu @pane_notify_count)
+  fi
+  tmux "${cmds[@]:1}"
+  while read -r client; do
+    [ -n "$client" ] && tmux refresh-client -S -t "$client" 2>/dev/null
+  done < <(tmux list-clients -F '#{client_name}')
+  printf '%d' "$kept"
+}
+
+prune_entry() {
+  if [ "$kept" -ge "$max" ] || [[ $in_view == *" $6 "* ]] || [[ $'\n'$windows != *$'\n'"$6 "* ]]; then
+    tmux set-option -gu "$ENTRY_PREFIX$1"
+    return 0
+  fi
+  kept=$((kept + 1))
+  badges="$badges$6=$2 "
 }
 
 with_lock() {
@@ -171,18 +209,6 @@ close_sidebar_only_windows() {
                | awk '{ n[$1]++; if ($2 == 1) s[$1]++ } END { for (w in n) if (n[w] == s[w]) print w }'); do
     quietly kill-window -t "$win"
   done
-}
-
-set_count() {
-  local client
-  if [ "$1" -gt 0 ]; then
-    tmux set-option -g @pane_notify_count "$1" \; set-option -g @pane_notify_bar_active 1
-  else
-    tmux set-option -gu @pane_notify_count \; set-option -gu @pane_notify_bar_active
-  fi
-  while read -r client; do
-    [ -n "$client" ] && tmux refresh-client -S -t "$client" 2>/dev/null
-  done < <(tmux list-clients -F '#{client_name}')
 }
 
 column_plan() {
@@ -268,11 +294,10 @@ render_bar() {
   local live viewed kept="" stale="" win id floating zoomed ww wh w can_float plan
   [ -z "${PANE_NOTIFY_TRACE:-}" ] || echo render >> "$PANE_NOTIFY_TRACE"
   close_sidebar_only_windows
-  live="$(list_entries prune)"
-  set_count "$(grep -c . <<<"$live")"
+  live="$(entries_prune)"
 
-  if [ -z "$live" ] || [ "$(tmux show-option -gqv @pane_notify_sidebar_open)" != 1 ]; then
-    [ -z "$live" ] && tmux set-option -gu @pane_notify_sidebar_open
+  if [ "$live" = 0 ] || [ "$(tmux show-option -gqv @pane_notify_sidebar_open)" != 1 ]; then
+    [ "$live" = 0 ] && tmux set-option -gu @pane_notify_sidebar_open
     kill_all_sidebars
     return 0
   fi
@@ -320,8 +345,11 @@ sidebar_toggle() {
     kill_all_sidebars
     return 0
   fi
-  if [ -z "$(list_entries prune)" ]; then
-    set_count 0
+  if [ "$(opt @pane-notify-sidebar on)" != on ]; then
+    tmux display-message ${client:+-c "$client"} "The pane-notify sidebar is off"
+    return 0
+  fi
+  if [ "$(entries_prune)" = 0 ]; then
     tmux display-message ${client:+-c "$client"} "No notifications"
     return 0
   fi
@@ -330,16 +358,16 @@ sidebar_toggle() {
 }
 
 record() {
-  add_entry "$@"
+  entries_add "$@"
   render_bar
 }
 
 forget() {
-  drop_entries_for "$1"
+  entries_drop "$1"
   render_bar
 }
 
-declare -a ROW_ENTRY=() ENTRY_NAME=() ENTRY_TARGET=()
+declare -a ROW_ENTRY=() ENTRY_ID=() ENTRY_TARGET=()
 
 wrap() {
   local width=$2 line="" word
@@ -370,7 +398,7 @@ put() {
 }
 
 sidebar_draw() {
-  local cols rows floating inner col reset=$'\033[0m' c_text c_subtle c_muted c_rule
+  local cols rows floating inner col reset=$'\033[0m' c_text c_subtle c_muted c_rule row=1 r i=0
   read -r cols rows floating <<<"$(tmux display-message -p -t "$TMUX_PANE" '#{pane_width} #{pane_height} #{?pane_floating_flag,1,0}')"
   col=2
   [ "$floating" = 1 ] && col=3
@@ -379,50 +407,44 @@ sidebar_draw() {
   c_subtle="$(sgr "$(colour_of @pane-notify-sidebar-subtle default)")"
   c_muted="$(sgr "$(colour_of @pane-notify-sidebar-muted brightblack)")"
   c_rule="$(sgr "$(colour_of @pane-notify-sidebar-rule brightblack)")"
-
-  local entries row=1 r i=0 name value state where label detail target icon colour l first
-  entries="$(list_entries)"
-  ROW_ENTRY=() ENTRY_NAME=() ENTRY_TARGET=()
+  ROW_ENTRY=() ENTRY_ID=() ENTRY_TARGET=()
 
   printf '\033[H\033[2J'
   if [ "$floating" = 1 ]; then
     for ((r = 1; r <= rows; r++)); do printf '\033[%d;1H%s│%s' "$r" "$c_rule" "$reset"; done
   fi
+  entries_each draw_entry
+}
 
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    name=${line%% *}
-    split_entry "${line#* }"
-    state=$E_STATE where=$E_WHERE label=$E_LABEL detail=$E_DETAIL target=$E_TARGET
-    icon="$(opt "@pane_notify_icon_$state" "●")"
-    colour="$(colour_of "@pane_notify_color_$state" "")"
-    ENTRY_NAME[i]=$name
-    ENTRY_TARGET[i]=$target
-    first=1
-    while IFS= read -r l; do
-      if [ -n "$first" ]; then
-        ROW_ENTRY[row]=$i; put "$(sgr "$colour")$icon$reset $c_text$l$reset"
-        first=""
-      else
-        ROW_ENTRY[row]=$i; put "  $c_text$l$reset"
-      fi
-    done < <(wrap "$where" $((inner - 2)))
-    while IFS= read -r l; do
-      ROW_ENTRY[row]=$i; put "  $c_subtle$l$reset"
-    done < <(wrap "$label" $((inner - 2)))
-    while IFS= read -r l; do
-      ROW_ENTRY[row]=$i; put "  $c_muted$l$reset"
-    done < <(wrap "$detail" $((inner - 2)))
-    row=$((row + 1))
-    i=$((i + 1))
-  done <<<"$entries"
+draw_entry() {
+  local icon colour l first=1
+  icon="$(opt "@pane_notify_icon_$2" "●")"
+  colour="$(colour_of "@pane_notify_color_$2" "")"
+  ENTRY_ID[i]=$1
+  ENTRY_TARGET[i]=$6
+  while IFS= read -r l; do
+    if [ -n "$first" ]; then
+      ROW_ENTRY[row]=$i; put "$(sgr "$colour")$icon$reset $c_text$l$reset"
+      first=""
+    else
+      ROW_ENTRY[row]=$i; put "  $c_text$l$reset"
+    fi
+  done < <(wrap "$3" $((inner - 2)))
+  while IFS= read -r l; do
+    ROW_ENTRY[row]=$i; put "  $c_subtle$l$reset"
+  done < <(wrap "$4" $((inner - 2)))
+  while IFS= read -r l; do
+    ROW_ENTRY[row]=$i; put "  $c_muted$l$reset"
+  done < <(wrap "$5" $((inner - 2)))
+  row=$((row + 1))
+  i=$((i + 1))
 }
 
 sidebar_click() {
   local i=${ROW_ENTRY[$1]:-}
   [ -n "$i" ] || return 0
   tmux last-pane -t "$TMUX_PANE" 2>/dev/null
-  tmux set-option -gu "${ENTRY_NAME[i]}" 2>/dev/null
+  entries_drop "${ENTRY_ID[i]}"
   tmux switch-client -t "${ENTRY_TARGET[i]}" 2>/dev/null
   tmux run-shell -b "'$self' bar-refresh"
 }
@@ -432,33 +454,44 @@ sidebar_close() {
   exit 0
 }
 
-sidebar() {
-  trap sidebar_close INT
-  printf '\033[?25l\033[?7l\033[?1000h\033[?1006h'
-  sidebar_draw
-  local c pending="" seq o b y
+# Reads keys until one means something and prints it: redraw, quit or
+# click <row>. Returns 1 at end of input.
+sidebar_decode() {
+  local c seq o b y
+  IFS= read -rsn1 c || return 1
   while :; do
-    if [ -n "$pending" ]; then
-      c=$pending pending=""
-    else
-      IFS= read -rsn1 c || break
-    fi
-    case "$c" in
-      R) sidebar_draw ;;
-      q) sidebar_close ;;
+    case $c in
+      R) echo redraw; return 0 ;;
+      q) echo quit; return 0 ;;
       $'\033')
-        IFS= read -rsn1 c || break
-        [ "$c" = '[' ] || { pending=$c; continue; }
+        IFS= read -rsn1 c || return 1
+        [ "$c" = '[' ] || continue
         seq=""
         while IFS= read -rsn1 c; do
           seq="$seq$c"
           printf -v o '%d' "'$c"
           [ "$o" -ge 64 ] && [ "$o" -le 126 ] && break
         done
-        [[ $seq == '<'*M ]] || continue
-        IFS=';' read -r b _ y <<<"${seq#<}"
-        [ "$b" = 0 ] && sidebar_click "${y%M}"
+        if [[ $seq == '<'*M ]]; then
+          IFS=';' read -r b _ y <<<"${seq#<}"
+          [ "$b" = 0 ] && { echo "click ${y%M}"; return 0; }
+        fi
         ;;
+    esac
+    IFS= read -rsn1 c || return 1
+  done
+}
+
+sidebar() {
+  local event
+  trap sidebar_close INT
+  printf '\033[?25l\033[?7l\033[?1000h\033[?1006h'
+  sidebar_draw
+  while event="$(sidebar_decode)"; do
+    case $event in
+      redraw) sidebar_draw ;;
+      quit) sidebar_close ;;
+      click\ *) sidebar_click "${event#click }" ;;
     esac
   done
 }
@@ -472,12 +505,8 @@ notify() {
     return 0
   fi
 
-  tmux set-option -w -t "$pane" @pane_notify "$state"
   where="$(clean "$(tmux display-message -p -t "$pane" '#{window_name}')")"
-
-  if [ "$(opt @pane-notify-sidebar on)" = on ]; then
-    with_lock record "$state" "$where" "$label" "$detail" "$(tmux display-message -p -t "$pane" '#{window_id}')"
-  fi
+  with_lock record "$state" "$where" "$label" "$detail" "$(tmux display-message -p -t "$pane" '#{window_id}')"
 
   local desktop
   desktop="$(opt @pane-notify-desktop unfocused)"
@@ -533,8 +562,7 @@ main() {
           notify waiting "${message:-Claude needs you}" ""
           ;;
         UserPromptSubmit)
-          tmux set-option -wu -t "$pane" @pane_notify
-          if [ -n "$(tmux show-option -gqv @pane_notify_bar_active)" ]; then
+          if [ -n "$(tmux show-option -gqv @pane_notify_count)" ]; then
             with_lock forget "$(tmux display-message -p -t "$pane" '#{window_id}')"
           fi
           ;;

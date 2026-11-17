@@ -98,8 +98,6 @@ section "functions"
   expect "utf8_locale finds a UTF-8 locale" "$([ -n "$LC_ALL" ] && echo yes)" yes
   expect "clean turns control characters into spaces" "$(clean $'a\nb\x07c\x1b]2;x')" "a b c ]2;x"
   expect "clean removes the entry separator" "$(clean "a${SEP}b")" "a b"
-  split_entry "done${SEP}w1${SEP}finished${SEP}make all${SEP}@4"
-  expect "split_entry" "$E_STATE|$E_WHERE|$E_LABEL|$E_DETAIL|$E_TARGET" "done|w1|finished|make all|@4"
   long="$(printf 'x%.0s' $(seq 400))"
   r="$(clean "$long")"
   expect "clean caps the length" "${#r}" 300
@@ -111,6 +109,48 @@ section "functions"
   expect "wrap splits on words" "$(wrap 'one two three four' 9 | tr '\n' '|')" "one two|three|four|"
   expect "wrap splits long words" "$(wrap 'abcdefghijkl' 5 | tr '\n' '|')" "abcde|fghij|kl|"
   expect "human_duration" "$(human_duration 59) $(human_duration 61) $(human_duration 3700)" "59s 1m01s 1h01m"
+  expect "decode: R redraws" "$(printf 'R' | sidebar_decode)" redraw
+  expect "decode: arrow then q quits" "$(printf '\e[Aq' | sidebar_decode)" quit
+  expect "decode: lone Esc keeps the key" "$(printf '\eq' | sidebar_decode)" quit
+  expect "decode: left click" "$(printf '\e[<0;5;3M' | sidebar_decode)" "click 3"
+  expect "decode: release is ignored" "$(printf '\e[<0;5;1m' | sidebar_decode)" ""
+  expect "decode: right click is ignored" "$(printf '\e[<2;5;3M' | sidebar_decode)" ""
+  expect "decode: other keys are ignored" "$(printf 'x\n' | sidebar_decode)" ""
+  expect "decode: one event per call" "$(printf 'Rq' | { sidebar_decode; sidebar_decode; } | tr '\n' ' ')" "redraw quit "
+)
+
+section "entry functions"
+setup
+(
+  TMUX="$(sock),1,0"
+  export TMUX
+  source "$N"
+  row() { printf '%s|%s|%s|%s|%s|%s\n' "$@"; }
+  fields() { entries_each row | cut -d'|' -f"$1" | tr '\n' ' '; }
+  w0="$(T display -p -t a:0 '#{window_id}')" w2="$(T display -p -t a:2 '#{window_id}')" w3="$(T display -p -t a:3 '#{window_id}')"
+  entries_add done w2 finished "make all" "$w2"
+  entries_add failed w3 "failed (1)" "make test" "$w3"
+  expect "entries_each lists newest first, field by field" "$(fields 2-6)" \
+    "failed|w3|failed (1)|make test|$w3 done|w2|finished|make all|$w2 "
+  entries_add waiting w2 "Claude is waiting" "" "$w2"
+  expect "entries_add replaces the window's entry" "$(fields 2,6)" "waiting|$w2 failed|$w3 "
+  entries_drop "$(entries_each row | head -1 | cut -d'|' -f1)"
+  expect "entries_drop takes an entry id" "$(fields 6)" "$w3 "
+  entries_drop "$w3"
+  expect "entries_drop takes a window id" "$(fields 6)" ""
+  entries_add done w0 finished x "$w0"
+  entries_add done w2 finished x "$w2"
+  entries_add failed w3 failed x "$w3"
+  T set -g @pane-notify-bar-max 1
+  expect "entries_prune prints what is left" "$(entries_prune)" 1
+  expect "and drops what is in view or beyond bar-max" "$(fields 6)" "$w3 "
+  expect "and badges only the kept entry's window" \
+    "$(T show -wqv -t a:0 @pane_notify)|$(T show -wqv -t a:2 @pane_notify)|$(T show -wqv -t a:3 @pane_notify)" "||failed"
+  expect "and sets the bell" "$(T show -gqv @pane_notify_count)" 1
+  entries_drop "$w3"
+  entries_prune >/dev/null
+  expect "an empty prune clears the badge and the bell" \
+    "$(T show -wqv -t a:3 @pane_notify)|$(T show -gqv @pane_notify_count)" "|"
 )
 
 section "plugin load"
@@ -154,6 +194,18 @@ expect "and clears its badge" "$(T show -wqv -t a:3 @pane_notify)" ""
 T select-window -t a:2
 wait_for '[ -z "$(count)" ]'
 expect "bell clears when every entry is seen" "$(count)" ""
+
+setup "@pane-notify-bar-max 1"
+notify a:2 process 0 12 one
+notify a:3 process 0 12 two
+expect "an entry beyond bar-max loses its badge" \
+  "$(T show -wqv -t a:2 @pane_notify)|$(T show -wqv -t a:3 @pane_notify)" "|done"
+
+setup "@pane-notify-sidebar off"
+notify a:2 process 0 12 one
+expect "sidebar off still sets the badge and the bell" "$(T show -wqv -t a:2 @pane_notify) $(count)" "done 1"
+toggle
+expect "sidebar off opens no sidebar" "$(sidebars)|$(T show -gqv @pane_notify_sidebar_open)" "|"
 
 section "desktop notifications"
 setup "@pane-notify-desktop always"
