@@ -119,7 +119,7 @@ colour (`red`, `brightblack`, `colour208`, `#ff5050`) or a format such as
 | `@pane-notify-sidebar-width` | `30` | Sidebar width, at most a third of the window. |
 | `@pane-notify-bar-max` | `10` | Notifications kept at once. |
 | `@pane-notify-key` | `a` | Prefix key for the sidebar; `off` for none. |
-| `@pane-notify-sidebar` | `on` | `off` keeps only badges and desktop notifications. |
+| `@pane-notify-sidebar` | `on` | `off` hides the sidebar; badges, the bell and desktop notifications stay. |
 | `@pane-notify-auto-format` | `on` | Add the badge and bell to the status bar. |
 | `@pane-notify-desktop` | `unfocused` | `unfocused`, `always` or `off`. |
 | `@pane-notify-desktop-protocol` | `osc9` | `osc9`, `osc777` or `osc99`. |
@@ -175,13 +175,13 @@ With `osc777` and `osc99` the window name is sent as the title.
 
 ## How it works
 
-- State lives in tmux options: `@pane_notify` on each window, and one global
-  `@pane_notify_entry_<n>` per sidebar entry.
-- tmux hooks are added at index `[77]` (clearing a window's badge) and `[78]`
-  (refreshing the bell and sidebar) of `session-window-changed`,
-  `client-session-changed`, `pane-focus-in`, `client-focus-in`,
-  `window-unlinked`, `after-resize-pane`, `pane-exited` and `after-kill-pane`.
-  Other plugins using those indexes would replace them.
+- Each notification is one global tmux option, `@pane_notify_entry_<n>`. The
+  badge (`@pane_notify` on each window) and the bell (`@pane_notify_count`)
+  are derived from these entries every time they change.
+- tmux hooks are added at index `[78]` (refreshing the badges, bell and
+  sidebar) of `session-window-changed`, `client-session-changed`,
+  `client-focus-in`, `window-unlinked`, `after-resize-pane`, `pane-exited` and
+  `after-kill-pane`. Other plugins using that index would replace them.
 - Updates are serialised with a lock directory in `$TMPDIR`.
 
 ## Troubleshooting
