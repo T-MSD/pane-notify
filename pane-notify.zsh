@@ -26,10 +26,7 @@ _pane_notify_precmd() {
   _pane_notify_start=""
 
   (( elapsed >= PANE_NOTIFY_MIN_SECONDS )) || return 0
-  # Ctrl-C / Ctrl-Z: the user is already at the pane.
   (( exit_status == 130 || exit_status == 148 )) && return 0
-  # Skip assignments, wrappers and their options: sudo -u deploy vim,
-  # env X=1 nvim.
   local word first="" wrapper="" skip=0
   for word in ${(z)cmd}; do
     if (( skip )); then skip=0; continue; fi
@@ -52,5 +49,4 @@ _pane_notify_precmd() {
 
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec _pane_notify_preexec
-# First in line, so $? is still the command's exit status.
 precmd_functions=(_pane_notify_precmd ${precmd_functions:#_pane_notify_precmd})

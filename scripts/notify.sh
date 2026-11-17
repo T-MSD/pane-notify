@@ -9,9 +9,8 @@
 
 self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
-# @pane_notify_entry_<seq> = state<US>where<US>label<US>detail<US>window-id
 ENTRY_PREFIX=@pane_notify_entry_
-US=$'\x1f'
+SEP=$'\xe2\x90\x9f'
 TEXT_MAX=300
 
 opt() {
@@ -20,7 +19,6 @@ opt() {
   printf '%s' "${value:-$2}"
 }
 
-# Character counts, wrapping and [[:cntrl:]] need a UTF-8 locale.
 utf8_locale() {
   local l
   for l in "${LC_ALL:-}" "${LC_CTYPE:-}" "${LANG:-}"; do
@@ -39,10 +37,9 @@ human_duration() {
   fi
 }
 
-# Newlines would split an entry's fields; BEL/ESC would end a desktop
-# notification's escape sequence early.
 clean() {
   local s=${1//[[:cntrl:]]/ }
+  s=${s//"$SEP"/ }
   [ "${#s}" -le "$TEXT_MAX" ] || s="${s:0:TEXT_MAX-1}…"
   printf '%s' "$s"
 }
@@ -61,8 +58,6 @@ any_client_focused() {
   tmux list-clients -F '#{client_flags}' | awk '","$0"," ~ /,focused,/ { f = 1 } END { exit !f }'
 }
 
-# Foreground SGR for a tmux colour: a name, brightNAME, colourN or #rrggbb.
-# "default" and anything unknown give no colour.
 sgr() {
   local c=$1 base=30 i=0 name h
   case $c in
@@ -84,7 +79,6 @@ sgr() {
   done
 }
 
-# An option's value with formats such as #{@my_colour} expanded.
 colour_of() { tmux display-message -p "$(opt "$1" "$2")"; }
 
 entry_names() {
@@ -95,22 +89,28 @@ entry_names() {
 drop_entries_for() {
   local name target
   for name in $(entry_names); do
-    IFS=$US read -r _ _ _ _ target <<<"$(tmux show-option -gqv "$name")"
-    [ "$target" = "$1" ] && tmux set-option -gu "$name"
+    target="$(tmux show-option -gqv "$name")"
+    [ "${target##*"$SEP"}" = "$1" ] && tmux set-option -gu "$name"
   done
 }
 
-# One entry per window. Runs under with_lock, which keeps the sequence unique.
 add_entry() {
   local state=$1 where=$2 label=$3 detail=$4 win=$5 seq
   drop_entries_for "$win"
   seq=$(( $(opt @pane_notify_seq 0) + 1 ))
   tmux set-option -g @pane_notify_seq "$seq"
-  tmux set-option -g "${ENTRY_PREFIX}${seq}" "${state}${US}${where}${US}${label}${US}${detail}${US}${win}"
+  tmux set-option -g "${ENTRY_PREFIX}${seq}" "${state}${SEP}${where}${SEP}${label}${SEP}${detail}${SEP}${win}"
 }
 
-# Prints entries newest first as name<US>value. With "prune", first deletes
-# ones whose window is on screen or gone, and any beyond @pane-notify-bar-max.
+split_entry() {
+  local v=$1
+  E_STATE=${v%%"$SEP"*}; v=${v#*"$SEP"}
+  E_WHERE=${v%%"$SEP"*}; v=${v#*"$SEP"}
+  E_LABEL=${v%%"$SEP"*}; v=${v#*"$SEP"}
+  E_DETAIL=${v%%"$SEP"*}
+  E_TARGET=${v#*"$SEP"}
+}
+
 list_entries() {
   local prune=${1:-} max in_view windows name value target n=0
   max="$(opt @pane-notify-bar-max 10)"
@@ -120,19 +120,16 @@ list_entries() {
   fi
   for name in $(entry_names); do
     value="$(tmux show-option -gqv "$name")"
-    IFS=$US read -r _ _ _ _ target <<<"$value"
+    target=${value##*"$SEP"}
     if [ -n "$prune" ] && { [ "$n" -ge "$max" ] || [[ $in_view == *" $target "* ]] || [[ $windows != *" $target "* ]]; }; then
       tmux set-option -gu "$name"
       continue
     fi
-    printf '%s%s%s\n' "$name" "$US" "$value"
+    printf '%s %s\n' "$name" "$value"
     n=$((n + 1))
   done
 }
 
-# Serialises entry changes and renders per tmux server. The lock holds its
-# owner's token, so only the owner releases it; a lock kept by the same owner
-# for ~4s (stalled, or killed with SIGKILL) is taken over.
 with_lock() {
   local dir token seen="" owner i=0
   dir="${TMPDIR:-/tmp}/pane-notify-$(id -u)-$(tmux display-message -p '#{pid}').lock"
@@ -149,7 +146,6 @@ with_lock() {
     sleep 0.05
   done
   printf '%s' "$token" > "$dir/owner"
-  # shellcheck disable=SC2064 # expand now: the locals are gone at exit
   trap "unlock '$dir' '$token'" EXIT
   trap 'exit 129' HUP
   trap 'exit 130' INT
@@ -164,9 +160,6 @@ unlock() {
   [ "$(cat "$1/owner" 2>/dev/null)" = "$2" ] && rm -rf "$1"
 }
 
-# Runs a tmux command whose hooks (after-kill-pane, window-unlinked, ...)
-# must not trigger another render. tmux runs after-* hooks before the command
-# returns; the flag is cleared separately in case the command fails.
 quietly() {
   tmux set-option -g @pane_notify_busy 1 \; "$@" 2>/dev/null
   tmux set-option -gu @pane_notify_busy
@@ -180,7 +173,6 @@ close_sidebar_only_windows() {
   done
 }
 
-# refresh-client -S so the bell does not wait for status-interval.
 set_count() {
   local client
   if [ "$1" -gt 0 ]; then
@@ -193,17 +185,6 @@ set_count() {
   done < <(tmux list-clients -F '#{client_name}')
 }
 
-# Opening a split sidebar shrinks the window's columns, but closing it gives
-# all the space to the column next to it. So the columns' widths are saved
-# when it opens and restored when it closes, or, if the panes changed in the
-# meantime, scaled back in proportion.
-#
-# Columns are found from pane positions: a border that no pane crosses
-# separates two of them. A column is resized through a pane spanning its full
-# width; one without such a pane keeps what tmux gives it.
-
-# Prints "pane width" for each column but the last (which takes the rest).
-# $2: a sidebar pane to leave out, scaling the others to the full window.
 column_plan() {
   local win=$1 sidebar=${2:-} ww
   ww="$(tmux display-message -p -t "$win" '#{window_width}')"
@@ -225,8 +206,6 @@ column_plan() {
         m = 0
         for (b in border) s[++m] = b + 0
         for (i = 2; i <= m; i++) for (j = i; j > 1 && s[j - 1] > s[j]; j--) { t = s[j]; s[j] = s[j - 1]; s[j - 1] = t }
-        # Old border b maps to b * (W + 1) / sl: the span up to the sidebar
-        # (with its border) grows to the whole window.
         prev = -1
         for (i = 1; i <= m; i++) {
           nb = int(s[i] * (W + 1) / sl + 0.5)
@@ -237,21 +216,17 @@ column_plan() {
       }'
 }
 
-# The tiled panes' geometry; floating panes do not affect the columns.
 pane_signature() {
   tmux list-panes -t "$1" -F '#{?pane_floating_flag,,#{pane_id}:#{pane_left}:#{pane_top}:#{pane_width}:#{pane_height}}' |
     awk 'NF' | tr '\n' ' '
 }
 
-# Called around creating a split sidebar: $2 is the plan from before it.
 save_columns() {
   local win=$1 plan=$2
   [ -n "$plan" ] || { tmux set-option -wu -t "$win" @pane_notify_columns; return 0; }
   tmux set-option -w -t "$win" @pane_notify_columns "$(pane_signature "$win")|$(tr '\n' ';' <<<"$plan")"
 }
 
-# Removing a split unzooms its window anyway, and the column widths are only
-# readable unzoomed, so a zoomed window is unzoomed first and zoomed again.
 kill_sidebar() {
   local id=$1 win=$2 floating=$3 zoomed=$4 zoomed_pane saved plan pane width
   if [ "$floating" = 1 ]; then
@@ -277,7 +252,6 @@ kill_sidebar() {
   return 0
 }
 
-# pane_floating_flag does not exist before tmux 3.7; the conditional reads 0.
 list_sidebars() {
   tmux list-panes -a -F '#{pane_id} #{window_id} #{?pane_floating_flag,1,0} #{window_zoomed_flag} #{@pane_notify_sidebar}' \
     | awk '$5 == 1 { print $1, $2, $3, $4 }'
@@ -303,11 +277,6 @@ render_bar() {
     return 0
   fi
 
-  # A zoomed window needs a floating sidebar (tmux 3.8+), since a split would
-  # unzoom it. Without floating panes a split sidebar just stays hidden behind
-  # the zoom. Replacements are created before the old ones are removed: with
-  # one real pane left, a zoom lost to the removal can only be restored while
-  # the floating sidebar exists.
   can_float="$(opt @pane_notify_floating 0)"
   viewed=" $(tmux list-clients -F '#{window_id}' | sort -u | tr '\n' ' ') "
   while read -r id win floating zoomed; do
@@ -370,7 +339,6 @@ forget() {
   render_bar
 }
 
-# Sidebar row -> entry index, for clicks.
 declare -a ROW_ENTRY=() ENTRY_NAME=() ENTRY_TARGET=()
 
 wrap() {
@@ -396,7 +364,6 @@ wrap() {
   return 0
 }
 
-# Uses sidebar_draw's locals row, rows and col.
 put() {
   [ "$row" -le "$rows" ] && printf '\033[%d;%dH%s' "$row" "$col" "$1"
   row=$((row + 1))
@@ -405,7 +372,6 @@ put() {
 sidebar_draw() {
   local cols rows floating inner col reset=$'\033[0m' c_text c_subtle c_muted c_rule
   read -r cols rows floating <<<"$(tmux display-message -p -t "$TMUX_PANE" '#{pane_width} #{pane_height} #{?pane_floating_flag,1,0}')"
-  # A split already has tmux's border on its left; a floating one draws its own.
   col=2
   [ "$floating" = 1 ] && col=3
   inner=$((cols - col))
@@ -425,9 +391,9 @@ sidebar_draw() {
 
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    name=${line%%"$US"*}
-    value=${line#*"$US"}
-    IFS=$US read -r state where label detail target <<<"$value"
+    name=${line%% *}
+    split_entry "${line#* }"
+    state=$E_STATE where=$E_WHERE label=$E_LABEL detail=$E_DETAIL target=$E_TARGET
     icon="$(opt "@pane_notify_icon_$state" "●")"
     colour="$(colour_of "@pane_notify_color_$state" "")"
     ENTRY_NAME[i]=$name
@@ -455,14 +421,12 @@ sidebar_draw() {
 sidebar_click() {
   local i=${ROW_ENTRY[$1]:-}
   [ -n "$i" ] || return 0
-  # The click made the sidebar the active pane; hand focus back first.
   tmux last-pane -t "$TMUX_PANE" 2>/dev/null
   tmux set-option -gu "${ENTRY_NAME[i]}" 2>/dev/null
   tmux switch-client -t "${ENTRY_TARGET[i]}" 2>/dev/null
   tmux run-shell -b "'$self' bar-refresh"
 }
 
-# The pane-exited hook then renders, closing the sidebar in other windows.
 sidebar_close() {
   tmux set-option -gu @pane_notify_sidebar_open
   exit 0
@@ -484,16 +448,13 @@ sidebar() {
       q) sidebar_close ;;
       $'\033')
         IFS= read -rsn1 c || break
-        # A lone Esc: the next key is handled normally.
         [ "$c" = '[' ] || { pending=$c; continue; }
-        # CSI ends at a byte in 0x40-0x7E (arrow keys, mouse reports).
         seq=""
         while IFS= read -rsn1 c; do
           seq="$seq$c"
           printf -v o '%d' "'$c"
           [ "$o" -ge 64 ] && [ "$o" -le 126 ] && break
         done
-        # SGR mouse: <button;x;yM
         [[ $seq == '<'*M ]] || continue
         IFS=';' read -r b _ y <<<"${seq#<}"
         [ "$b" = 0 ] && sidebar_click "${y%M}"
@@ -525,9 +486,6 @@ notify() {
   fi
 }
 
-# Written to each client's terminal directly, past tmux. OSC 9 has no title
-# field; terminals such as Ghostty and iTerm2 add their own. ';' separates
-# fields in all three sequences.
 desktop_notify() {
   local title=${1//;/,} body=${2//;/,} tty seq st=$'\033\\'
   case "$(opt @pane-notify-desktop-protocol osc9)" in

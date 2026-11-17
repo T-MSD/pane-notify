@@ -16,7 +16,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 22.04 ships tmux 3.2a (the minimum), 24.04 ships 3.4, Homebrew the latest.
         os: [ubuntu-22.04, ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:

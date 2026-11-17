@@ -24,7 +24,6 @@ get_opt() {
   printf '%s' "${value:-$2}"
 }
 
-# "tmux 3.2a" -> 302; development builds ("next-3.9", "master") count as new.
 tmux_version() {
   local v major minor
   v="$(tmux -V)"
@@ -42,18 +41,15 @@ if [ "$version" -lt 302 ]; then
   tmux display-message "pane-notify needs tmux 3.2 or later ($(tmux -V))"
   exit 0
 fi
-# Floating panes that stay above a zoomed pane (new-pane -A).
 if [ "$version" -ge 308 ]; then
   tmux set-option -g @pane_notify_floating 1
 else
   tmux set-option -gu @pane_notify_floating
 fi
 
-# U+25CF and U+1F514 as UTF-8 bytes.
 circle=$'\xe2\x97\x8f'
 bell=$'\xf0\x9f\x94\x94 '
 
-# Written to internal options so the user-facing ones are never overwritten.
 badge=""
 for spec in "done:green" "failed:red" "waiting:yellow"; do
   IFS=: read -r state default_colour <<<"$spec"
@@ -82,17 +78,12 @@ here="$(cd "$(dirname "$0")" && pwd)"
 key="$(get_opt @pane-notify-key a)"
 [ "$key" = off ] || tmux bind-key "$key" run-shell -b "'$here/scripts/notify.sh' sidebar-toggle '#{client_name}'"
 
-# A background session's current window can change unseen (e.g. kill-window).
 clear="if-shell -F '#{session_attached}' 'set-option -wu @pane_notify'"
 for hook in session-window-changed client-session-changed pane-focus-in; do
   tmux set-hook -g "${hook}[77]" "$clear"
 done
 
-# Skipped while @pane_notify_busy is set: the plugin's own kills need no new
-# render.
 follow="if-shell -F '#{?#{@pane_notify_busy},,#{@pane_notify_bar_active}}' { run-shell -b \"'$here/scripts/notify.sh' bar-refresh\" }"
-# after-resize-pane: zoom toggles. pane-exited/after-kill-pane: a window left
-# with only its sidebar.
 for hook in session-window-changed client-session-changed client-focus-in window-unlinked after-resize-pane \
             pane-exited after-kill-pane; do
   tmux set-hook -g "${hook}[78]" "$follow" 2>/dev/null

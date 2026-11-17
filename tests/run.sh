@@ -12,8 +12,6 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 N="$ROOT/scripts/notify.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/pane-notify-test.XXXXXX")"
-# Each setup gets new server names: starting a server under the name of one
-# that is still shutting down fails on Linux.
 RUN=0
 IN="pn-test-$$-0" OUT="pn-outer-$$-0"
 VERBOSE=${1:-}
@@ -29,19 +27,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Results go to a file so checks inside subshells count too.
 ok()      { echo pass >> "$RESULTS"; printf '  ok    %s\n' "$1"; }
 bad()     { echo fail >> "$RESULTS"; printf '  FAIL  %s\n        %s\n' "$1" "$2"; }
 skipped() { echo skip >> "$RESULTS"; printf '  skip  %s (%s)\n' "$1" "$2"; }
 
-# expect <description> <actual> <expected>
 expect() {
   if [ "$2" = "$3" ]; then ok "$1"; [ -z "$VERBOSE" ] || printf '        = %s\n' "$2"
   else bad "$1" "expected [$3], got [$2]"
   fi
 }
 
-# Polls a shell condition for up to $2 seconds (default 5).
 wait_for() {
   local i
   for ((i = 0; i < ${2:-5} * 10; i++)); do
@@ -63,10 +58,9 @@ sidebars() { T list-panes -a -F '#{pane_id} #{@pane_notify_sidebar}' | awk '$2 =
 sidebar_in() { T list-panes -t "$1" -F '#{pane_id} #{@pane_notify_sidebar}' | awk '$2 == 1 { print $1 }'; }
 drawn() { T capture-pane -p -t "$1" | grep -ac '●'; }
 client_window() { T list-clients -F '#{window_name}'; }
-# Sidebars in window main that are floating (11) or split (10).
+SEP=$'\xe2\x90\x9f'
+field() { awk -F "$SEP" -v n="$1" '{ print $n }'; }
 sidebar_kind() { T list-panes -t a:0 -F '#{@pane_notify_sidebar}#{?pane_floating_flag,1,0}' | grep -c "^$1\$"; }
-# Waits until only a sidebar of kind $1 is left and no render holds the lock:
-# replacing one kind with the other unzooms the window for a moment.
 lockdir() { echo "${TMPDIR:-/tmp}/pane-notify-$(id -u)-$(T display -p '#{pid}').lock"; }
 settle_kind() {
   local other=10
@@ -76,9 +70,6 @@ settle_kind() {
   wait_for '[ ! -d "$(lockdir)" ]'
 }
 
-# Inner server: session "a" with windows main (viewed) and w1..w5; an outer
-# server whose pane runs the inner client, so the client has a real terminal
-# (focus, mouse) and everything it writes can be recorded.
 setup() {
   T kill-server 2>/dev/null
   O kill-server 2>/dev/null
@@ -99,16 +90,16 @@ setup() {
   wait_for '[ -n "$(T list-clients)" ]' || { echo "inner client did not attach"; exit 1; }
 }
 
-# --- pure functions (sourced) -----------------------------------------------------
-
 section "functions"
 (
-  # shellcheck source=../scripts/notify.sh
   source "$N"
   LC_ALL="$(utf8_locale)"
   export LC_ALL
   expect "utf8_locale finds a UTF-8 locale" "$([ -n "$LC_ALL" ] && echo yes)" yes
   expect "clean turns control characters into spaces" "$(clean $'a\nb\x07c\x1b]2;x')" "a b c ]2;x"
+  expect "clean removes the entry separator" "$(clean "a${SEP}b")" "a b"
+  split_entry "done${SEP}w1${SEP}finished${SEP}make all${SEP}@4"
+  expect "split_entry" "$E_STATE|$E_WHERE|$E_LABEL|$E_DETAIL|$E_TARGET" "done|w1|finished|make all|@4"
   long="$(printf 'x%.0s' $(seq 400))"
   r="$(clean "$long")"
   expect "clean caps the length" "${#r}" 300
@@ -122,8 +113,6 @@ section "functions"
   expect "human_duration" "$(human_duration 59) $(human_duration 61) $(human_duration 3700)" "59s 1m01s 1h01m"
 )
 
-# --- plugin load ------------------------------------------------------------------
-
 section "plugin load"
 setup
 expect "key binding" "$(T list-keys -T prefix a | grep -c sidebar-toggle)" 1
@@ -132,7 +121,6 @@ expect "window format gets the badge" "$(T show -gwv window-status-format | grep
 T run-shell "'$ROOT/pane-notify.tmux'"
 expect "reload does not add the badge twice" \
   "$(T show -gwv window-status-current-format | grep -o '@pane-notify-badge' | wc -l | tr -d ' ')" 1
-# Every follow hook this tmux supports (3.2 lacks some), in either scope.
 missing=""
 for h in session-window-changed client-session-changed client-focus-in window-unlinked \
          after-resize-pane pane-exited after-kill-pane; do
@@ -146,21 +134,19 @@ setup "@pane-notify-auto-format off" "@pane-notify-key off"
 expect "auto-format off leaves status-right alone" "$(T show -gv status-right | grep -c '@pane-notify-status')" 0
 expect "key off binds nothing" "$(T list-keys -T prefix a 2>/dev/null | grep -c sidebar-toggle)" 0
 
-# --- entries ------------------------------------------------------------------------
-
 section "entries"
 setup
 notify a:0 process 0 12 visible
 expect "a window being looked at gets no entry" "$(entries)" 0
 notify a:3 process 0 12 $'for i in 1 2\ndo sleep 1; done'
 expect "multi-line command keeps its entry" "$(count)" 1
-expect "newlines stored as spaces" "$(T show -gv @pane_notify_entry_1 | tr '\037' '|')" \
+expect "newlines stored as spaces" "$(T show -gv @pane_notify_entry_1 | sed "s/$SEP/|/g")" \
   "done|w3|finished in 12s|for i in 1 2 do sleep 1; done|$(T display -p -t a:3 '#{window_id}')"
 expect "badge set on the window" "$(T show -wv -t a:3 @pane_notify)" "done"
 notify a:2 process 1 75 make
 notify a:3 process 0 12 again
 expect "newer entry from the same window replaces the old" "$(entries)" 2
-expect "newest has the highest sequence" "$(T show -gv @pane_notify_entry_3 | cut -d$'\037' -f4)" again
+expect "newest has the highest sequence" "$(T show -gv @pane_notify_entry_3 | field 4)" again
 T select-window -t a:3
 wait_for '[ "$(count)" = 1 ]'
 expect "opening a window drops its entry" "$(count)" 1
@@ -168,8 +154,6 @@ expect "and clears its badge" "$(T show -wqv -t a:3 @pane_notify)" ""
 T select-window -t a:2
 wait_for '[ -z "$(count)" ]'
 expect "bell clears when every entry is seen" "$(count)" ""
-
-# --- desktop notifications ----------------------------------------------------------
 
 section "desktop notifications"
 setup "@pane-notify-desktop always"
@@ -189,8 +173,6 @@ notify a:4 process 0 12 test
 wait_for 'grep -aq "99;i=" "$WORK/out.raw"'
 expect "OSC 99 sends title then body" "$(grep -ao $'\e]99;[^\e]*' "$WORK/out.raw" | tail -2 | tr '\n' '|')" \
   $'\e]99;i=pane-notify:d=0;w4|\e]99;i=pane-notify:p=body;finished in 12s · test|'
-
-# --- sidebar ------------------------------------------------------------------------
 
 section "sidebar"
 setup
@@ -219,8 +201,6 @@ expect "and removes the entry" "$(count)" 3
 wait_for '[ -n "$(sidebar_in a:4)" ]'
 expect "the sidebar follows to the new window" "$([ -n "$(sidebar_in a:4)" ] && [ -z "$(sidebar_in a:0)" ] && echo yes)" yes
 
-# Waits until a sidebar has drawn (its key handlers are then installed) and
-# no render is still running.
 settled() { wait_for '[ -n "$(sidebars)" ] && [ "$(drawn "$(sidebars)")" -gt 0 ]'; sleep 0.8; }
 
 settled
@@ -294,15 +274,13 @@ wait_for '[ "$(T list-windows -t a -F "#{window_name}" | grep -c main)" = 0 ]'
 expect "a window left with only its sidebar closes" "$(T list-windows -t a -F '#{window_name}' | grep -c main)" 0
 expect "busy flag never left set" "$(T show -gqv @pane_notify_busy)" ""
 
-# --- Claude Code hooks --------------------------------------------------------------
-
 section "Claude Code hooks"
 if command -v jq >/dev/null; then
   setup
   echo '{"hook_event_name":"Stop"}' | notify a:2 claude
   expect "Stop adds a waiting entry" "$(T show -wqv -t a:2 @pane_notify) $(count)" "waiting 1"
   echo '{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash"}' | notify a:3 claude
-  expect "Notification uses its message" "$(T show -gv @pane_notify_entry_2 | cut -d$'\037' -f3)" \
+  expect "Notification uses its message" "$(T show -gv @pane_notify_entry_2 | field 3)" \
     "Claude needs your permission to use Bash"
   echo '{"hook_event_name":"UserPromptSubmit"}' | notify a:2 claude
   expect "UserPromptSubmit clears the window" "$(T show -wqv -t a:2 @pane_notify) $(count)" " 1"
@@ -310,17 +288,13 @@ else
   skipped "Claude Code hooks" "jq not installed"
 fi
 
-# --- lock ---------------------------------------------------------------------------
-
 section "lock"
 setup
 (
   TMUX="$(sock),1,0"
   export TMUX
-  # shellcheck source=../scripts/notify.sh
   source "$N"
   lock="${TMPDIR:-/tmp}/pane-notify-$(id -u)-$(tmux display-message -p '#{pid}').lock"
-  # A holds the lock for 7s; B takes it over after ~4s and holds it for 6s.
   ( with_lock sleep 7 ) &
   sleep 0.3
   ( with_lock bash -c "cat '$lock/owner' > '$WORK/b-owner'; sleep 6" ) &
@@ -330,7 +304,6 @@ setup
     "$([ -d "$lock" ] && cat "$lock/owner")" "$(cat "$WORK/b-owner" 2>/dev/null)"
   wait
   expect "the lock is gone once both finish" "$([ -d "$lock" ] && echo held)" ""
-  # Short tmux calls, like a render: bash runs the TERM trap between them.
   work() { local i; for ((i = 0; i < 100; i++)); do tmux display -p x >/dev/null; sleep 0.05; done; }
   ( with_lock work ) &
   holder=$!
@@ -340,11 +313,6 @@ setup
   expect "TERM releases the lock" "$([ -d "$lock" ] && echo held)" ""
 )
 
-# --- shell hooks --------------------------------------------------------------------
-
-# Types a command into the shell in window w5 (not viewed), waits for a new
-# prompt (the shells print "__prompt__"), then checks whether a notification
-# was recorded.
 prompts() { T capture-pane -p -S - -t a:5 | grep -c '^__prompt__'; }
 shell_case() {
   local desc=$1 cmd=$2 want=$3 seq_before prompts_before
@@ -356,9 +324,13 @@ shell_case() {
   expect "$desc" "$([ "$(T show -gqv @pane_notify_seq)" != "$seq_before" ] && echo notified || echo silent)" "$want"
 }
 
-newest_field() { T show -gv "@pane_notify_entry_$(T show -gv @pane_notify_seq)" | cut -d$'\037' -f"$1"; }
+newest_field() { T show -gv "@pane_notify_entry_$(T show -gv @pane_notify_seq)" | field "$1"; }
 
-# A 2s threshold and 2.5s commands: bash before 5.0 measures whole seconds.
+section "bash hook: existing DEBUG trap"
+expect "an existing DEBUG trap is kept, after ours" \
+  "$(TMUX=x TMUX_PANE=%0 bash --norc --noprofile -c "trap 'seen=\"a b\"' DEBUG; source '$ROOT/pane-notify.bash'; eval \"\$PROMPT_COMMAND\"; trap -p DEBUG" 2>/dev/null | tail -1)" \
+  "trap -- '_pane_notify_debug; seen=\"a b\"' DEBUG"
+
 for sh in zsh bash; do
   section "$sh hook"
   if ! command -v "$sh" >/dev/null; then skipped "$sh hook" "$sh not installed"; continue; fi
@@ -381,8 +353,6 @@ for sh in zsh bash; do
   shell_case "ignored behind env and assignments" "X=1 env Y=2 sleep 2.5" silent
   shell_case "ignored behind options with values" "env -u HOME sleep 2.5" silent
 done
-
-# --- summary ------------------------------------------------------------------------
 
 pass="$(grep -c pass "$RESULTS")" fail="$(grep -c fail "$RESULTS")" skip="$(grep -c skip "$RESULTS")"
 printf '\n%d passed, %d failed, %d skipped (tmux %s, bash %s)\n' "$pass" "$fail" "$skip" \

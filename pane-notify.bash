@@ -25,8 +25,6 @@ _pane_notify_preexec() {
   _pane_notify_start="$(_pane_notify_now)"
 }
 
-# Skip assignments, wrappers and their options: sudo -u deploy vim,
-# env X=1 nvim.
 _pane_notify_ignored() {
   local word wrapper="" skip=0 first="" ignored
   local -a words=()
@@ -60,7 +58,6 @@ _pane_notify_precmd() {
   _pane_notify_start=""
 
   (( elapsed >= PANE_NOTIFY_MIN_SECONDS )) || return 0
-  # Ctrl-C / Ctrl-Z: the user is already at the pane.
   (( exit_status == 130 || exit_status == 148 )) && return 0
   _pane_notify_ignored "$cmd" && return 0
 
@@ -68,12 +65,9 @@ _pane_notify_precmd() {
 }
 
 if declare -F __bp_preexec_invoke_exec >/dev/null; then
-  # shellcheck disable=SC2034 # read by bash-preexec
   preexec_functions+=(_pane_notify_preexec)
   precmd_functions=(_pane_notify_precmd "${precmd_functions[@]}")
 else
-  # The DEBUG trap fires for every simple command, including those run by
-  # PROMPT_COMMAND; only the first one after the prompt is the user's.
   _pane_notify_debug() {
     [[ -n $_pane_notify_armed ]] || return 0
     case $BASH_COMMAND in _pane_notify_*) return 0 ;; esac
@@ -87,28 +81,23 @@ else
   }
   _pane_notify_arm() { _pane_notify_armed=1; }
 
-  # trap -p prints "trap -- '<command>' DEBUG", quoted for reuse.
-  _pane_notify_chain_trap() {
-    eval "set -- $(trap -p DEBUG)"
-    # shellcheck disable=SC2064 # the existing command, expanded now
-    case ${3:-} in
+  _pane_notify_chain='
+    _pane_notify_parts=()
+    eval "_pane_notify_parts=($(trap -p DEBUG))"
+    case ${_pane_notify_parts[2]:-} in
       *_pane_notify_debug*) ;;
-      "") trap '_pane_notify_debug' DEBUG ;;
-      *) trap "_pane_notify_debug; $3" DEBUG ;;
+      "") trap _pane_notify_debug DEBUG ;;
+      *) trap "_pane_notify_debug; ${_pane_notify_parts[2]}" DEBUG ;;
     esac
-  }
-  _pane_notify_chain_trap
+    unset _pane_notify_parts'
 
-  # First, so $? is still the command's exit status; arming last, so the rest
-  # of PROMPT_COMMAND is not taken for the user's command. bash 5.1+ allows an
-  # array.
   if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
     [[ " ${PROMPT_COMMAND[*]} " == *" _pane_notify_precmd "* ]] ||
-      PROMPT_COMMAND=(_pane_notify_precmd "${PROMPT_COMMAND[@]}" _pane_notify_arm)
+      PROMPT_COMMAND=(_pane_notify_precmd "${PROMPT_COMMAND[@]}" 'eval "$_pane_notify_chain"' _pane_notify_arm)
   else
     case ${PROMPT_COMMAND:-} in
       *_pane_notify_precmd*) ;;
-      *) PROMPT_COMMAND="_pane_notify_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}; _pane_notify_arm" ;;
+      *) PROMPT_COMMAND="_pane_notify_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}; eval \"\$_pane_notify_chain\"; _pane_notify_arm" ;;
     esac
   fi
 fi
