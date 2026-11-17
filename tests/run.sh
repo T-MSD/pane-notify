@@ -50,6 +50,16 @@ wait_for() {
   return 1
 }
 
+eventually() {
+  local i v
+  for ((i = 0; i < 50; i++)); do
+    v="$(eval "$1")"
+    [ "$v" = "$2" ] && break
+    sleep 0.1
+  done
+  printf '%s' "$v"
+}
+
 section() { printf '\n%s\n' "$1"; }
 
 sock() { T display -p '#{socket_path}'; }
@@ -269,15 +279,15 @@ toggle
 wait_for '[ -n "$(sidebar_in a:0)" ] && [ "$(drawn "$(sidebar_in a:0)")" = 2 ]'
 sb="$(sidebar_in a:0)"
 expect "opens as a split in the viewed window" "$(T display -p -t "$sb" '#{?pane_floating_flag,1,0} #{pane_width}')" "0 30"
-expect "lists both entries" "$(drawn "$sb")" 2
+expect "lists both entries" "$(eventually 'drawn "$sb"' 2)" 2
 T send-keys -t "$sb" Up
 notify a:3 process 0 12 three
 wait_for '[ "$(drawn "$sb")" = 3 ]'
-expect "redraws after an arrow key" "$(drawn "$sb")" 3
+expect "redraws after an arrow key" "$(eventually 'drawn "$sb"' 3)" 3
 T send-keys -t "$sb" Escape
 notify a:4 process 0 12 four
 wait_for '[ "$(drawn "$sb")" = 4 ]'
-expect "redraws after a lone Esc" "$(drawn "$sb")" 4
+expect "redraws after a lone Esc" "$(eventually 'drawn "$sb"' 4)" 4
 O send-keys -t o -l $'\e[<0;95;2M'
 wait_for '[ "$(client_window)" = w4 ]'
 expect "clicking an entry opens its window" "$(client_window)" w4
@@ -323,40 +333,40 @@ wait_for '[ -n "$(sidebar_in a:0)" ] && [ "$(drawn "$(sidebar_in a:0)")" = 3 ]'
 sb="$(sidebar_in a:0)"
 expect "opening the sidebar focuses it" "$(T display -p -t a:0 '#{pane_id}')" "$sb"
 wait_for '[ "$(highlighted "$sb")" = w3 ]'
-expect "and highlights the newest entry" "$(highlighted "$sb")" w3
+expect "and highlights the newest entry" "$(eventually 'highlighted "$sb"' w3)" w3
 T select-pane -t a:0.0
 wait_for '[ -z "$(highlighted "$sb")" ]'
-expect "nothing is highlighted while another pane is focused" "$(highlighted "$sb")" ""
+expect "nothing is highlighted while another pane is focused" "$(eventually 'highlighted "$sb"' "")" ""
 T select-pane -t "$sb"
 wait_for '[ "$(highlighted "$sb")" = w3 ]'
-expect "focusing the sidebar highlights the selection again" "$(highlighted "$sb")" w3
+expect "focusing the sidebar highlights the selection again" "$(eventually 'highlighted "$sb"' w3)" w3
 T send-keys -t "$sb" Up
 sleep 0.3
-expect "Up stops at the first entry" "$(highlighted "$sb")" w3
+expect "Up stops at the first entry" "$(eventually 'highlighted "$sb"' w3)" w3
 T send-keys -t "$sb" Down
 wait_for '[ "$(highlighted "$sb")" = w2 ]'
-expect "Down selects the next entry" "$(highlighted "$sb")" w2
+expect "Down selects the next entry" "$(eventually 'highlighted "$sb"' w2)" w2
 T send-keys -t "$sb" Down Down
 wait_for '[ "$(highlighted "$sb")" = w1 ]'
 sleep 0.3
-expect "Down stops at the last entry" "$(highlighted "$sb")" w1
+expect "Down stops at the last entry" "$(eventually 'highlighted "$sb"' w1)" w1
 T send-keys -t "$sb" Up
 wait_for '[ "$(highlighted "$sb")" = w2 ]'
-expect "Up selects the previous entry" "$(highlighted "$sb")" w2
+expect "Up selects the previous entry" "$(eventually 'highlighted "$sb"' w2)" w2
 notify a:2 process 0 12 two-again
 wait_for '[ "$(T capture-pane -p -t "$sb" | grep -c two-again)" = 1 ]'
-expect "the selection stays on a window that notifies again" "$(highlighted "$sb")" w2
+expect "the selection stays on a window that notifies again" "$(eventually 'highlighted "$sb"' w2)" w2
 T send-keys -t "$sb" x
 wait_for '[ "$(count)" = 2 ] && [ "$(drawn "$sb")" = 2 ]'
 expect "x removes the selected entry" "$(count)|$(T show -wqv -t a:2 @pane_notify)|$(client_window)" "2||main"
 wait_for '[ "$(highlighted "$sb")" = w3 ]'
-expect "and selects the entry below it" "$(highlighted "$sb")" w3
+expect "and selects the entry below it" "$(eventually 'highlighted "$sb"' w3)" w3
 T select-pane -t a:0.0
 wait_for '[ -z "$(highlighted "$sb")" ]'
-expect "leaving the sidebar hides the highlight" "$(highlighted "$sb")" ""
+expect "leaving the sidebar hides the highlight" "$(eventually 'highlighted "$sb"' "")" ""
 T select-pane -t "$sb"
 wait_for '[ "$(highlighted "$sb")" = w3 ]'
-expect "and coming back keeps the selection" "$(highlighted "$sb")" w3
+expect "and coming back keeps the selection" "$(eventually 'highlighted "$sb"' w3)" w3
 T send-keys -t "$sb" Enter
 wait_for '[ "$(client_window)" = w3 ]'
 expect "Enter opens the selected entry's window" "$(client_window)" w3
@@ -384,14 +394,14 @@ setup "@pane-notify-sidebar-selected '#405060'"
 notify a:1 process 0 12 one
 toggle
 wait_for '[ "$(highlighted "$(sidebar_in a:0)" "48;2;64;80;96m")" = w1 ]'
-expect "the highlight colour is an option" "$(highlighted "$(sidebar_in a:0)" "48;2;64;80;96m")" w1
+expect "the highlight colour is an option" "$(eventually 'highlighted "$(sidebar_in a:0)" "48;2;64;80;96m"' w1)" w1
 
 OUTER_BG=""
 setup
 notify a:1 process 0 12 one
 toggle
 wait_for '[ "$(highlighted "$(sidebar_in a:0)" "$REVERSE")" = w1 ]'
-expect "without a known background it uses reverse video" "$(highlighted "$(sidebar_in a:0)" "$REVERSE")" w1
+expect "without a known background it uses reverse video" "$(eventually 'highlighted "$(sidebar_in a:0)" "$REVERSE"' w1)" w1
 toggle
 wait_for '[ -z "$(sidebars)" ]'
 T set -g window-style 'bg=#123456'

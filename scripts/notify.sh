@@ -423,8 +423,20 @@ wrap() {
 }
 
 put() {
-  [ "$row" -le "$rows" ] &&
-    printf '\033[%d;%dH%s%*s\033[%d;%dH%s\033[0m' "$row" $((col - 1)) "$bg" $((inner + 2)) "" "$row" "$col" "$1"
+  local line
+  if [ "$row" -le "$rows" ]; then
+    printf -v line '\033[%d;%dH%s%*s\033[%d;%dH%s\033[0m' "$row" $((col - 1)) "$bg" $((inner + 2)) "" "$row" "$col" "$1"
+    frame=$frame$line
+  fi
+  row=$((row + 1))
+}
+
+blank() {
+  local line
+  if [ "$row" -le "$rows" ]; then
+    printf -v line '\033[%d;%dH\033[K' "$row" $((col - 1))
+    frame=$frame$line
+  fi
   row=$((row + 1))
 }
 
@@ -496,11 +508,13 @@ sidebar_select() {
 }
 
 sidebar_paint() {
-  local row=1 r i bg l first fg=$'\033[39m'
+  local row=1 r i bg l first fg=$'\033[39m' frame=$'\033[0m' line
   ROW_ENTRY=()
-  printf '\033[0m\033[H\033[2J'
   if [ "$floating" = 1 ]; then
-    for ((r = 1; r <= rows; r++)); do printf '\033[%d;1H%s│\033[0m' "$r" "$c_rule"; done
+    for ((r = 1; r <= rows; r++)); do
+      printf -v line '\033[%d;1H%s│\033[0m' "$r" "$c_rule"
+      frame=$frame$line
+    done
   fi
   for i in "${!ENTRY_ID[@]}"; do
     bg=""
@@ -521,8 +535,10 @@ sidebar_paint() {
     while IFS= read -r l; do
       ROW_ENTRY[row]=$i; put "  $c_muted$l"
     done < <(wrap "${ENTRY_DETAIL[i]}" $((inner - 2)))
-    row=$((row + 1))
+    blank
   done
+  while [ "$row" -le "$rows" ]; do blank; done
+  printf '%s' "$frame"
 }
 
 sidebar_move() {
