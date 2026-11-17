@@ -207,6 +207,15 @@ expect "sidebar off still sets the badge and the bell" "$(T show -wqv -t a:2 @pa
 toggle
 expect "sidebar off opens no sidebar" "$(sidebars)|$(T show -gqv @pane_notify_sidebar_open)" "|"
 
+setup
+notify a:2 process 0 12 one
+toggle
+wait_for '[ -n "$(sidebar_in a:0)" ]'
+T set -g @pane-notify-sidebar off
+T run-shell "'$N' bar-refresh"
+wait_for '[ -z "$(sidebars)" ]'
+expect "turning the sidebar off closes an open one" "$(sidebars)|$(T show -gqv @pane_notify_sidebar_open)" "|"
+
 section "desktop notifications"
 setup "@pane-notify-desktop always"
 notify a:2 process 1 12 $'make\a\e]2;PWNED\a'
