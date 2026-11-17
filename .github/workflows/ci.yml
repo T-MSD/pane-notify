@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --version
+      - run: shellcheck --severity=warning --external-sources scripts/notify.sh pane-notify.tmux pane-notify.bash tests/run.sh
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.04 ships tmux 3.2a (the minimum), 24.04 ships 3.4, Homebrew the latest.
+        os: [ubuntu-22.04, ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tmux, zsh, jq
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y tmux zsh jq
+          else
+            brew install tmux
+          fi
+          tmux -V
+      - run: tests/run.sh

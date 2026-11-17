@@ -1,0 +1,12 @@
+{
+  "name": "pane-notify",
+  "description": "tmux notifications for Claude Code",
+  "owner": { "name": "T-MSD" },
+  "plugins": [
+    {
+      "name": "pane-notify",
+      "source": "./",
+      "description": "Badge the tmux window, ring a status-bar bell and send a desktop notification when Claude Code is waiting for you."
+    }
+  ]
+}

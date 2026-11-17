@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.tmux/plugins/pane-notify/scripts/notify.sh\" claude", "timeout": 5 }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|elicitation_dialog",
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.tmux/plugins/pane-notify/scripts/notify.sh\" claude", "timeout": 5 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.tmux/plugins/pane-notify/scripts/notify.sh\" claude", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

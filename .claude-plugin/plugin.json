@@ -1,0 +1,9 @@
+{
+  "name": "pane-notify",
+  "version": "0.1.0",
+  "description": "Badge the tmux window, ring a status-bar bell and send a desktop notification when Claude Code is waiting for you.",
+  "homepage": "https://github.com/T-MSD/pane-notify",
+  "repository": "https://github.com/T-MSD/pane-notify",
+  "license": "MIT",
+  "keywords": ["tmux", "notifications", "hooks"]
+}

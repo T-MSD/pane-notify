@@ -1,0 +1,14 @@
+# Changelog
+
+## 0.1.0 (unreleased)
+
+First release.
+
+- Badge on the window, bell in the status bar and a desktop notification when a
+  long command finishes (zsh, bash) or Claude Code is waiting for input.
+- Sidebar listing unseen notifications, toggled with `prefix + a`; click an
+  entry to open its window, `q` or Ctrl-C to close it.
+- Floating sidebar in zoomed windows on tmux 3.8+.
+- Closing the sidebar restores the widths of the window's columns.
+- Desktop notifications over OSC 9, OSC 777 or OSC 99.
+- Claude Code hooks shipped as a Claude Code plugin.
