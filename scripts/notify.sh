@@ -152,7 +152,7 @@ entries_prune() {
   else
     cmds+=(\; set-option -gu @pane_notify_count)
   fi
-  tmux "${cmds[@]:1}"
+  tmux "${cmds[@]:1}" 2>/dev/null
   while read -r client; do
     [ -n "$client" ] && tmux refresh-client -S -t "$client" 2>/dev/null
   done < <(tmux list-clients -F '#{client_name}')
@@ -296,8 +296,10 @@ render_bar() {
   close_sidebar_only_windows
   live="$(entries_prune)"
 
-  if [ "$live" = 0 ] || [ "$(tmux show-option -gqv @pane_notify_sidebar_open)" != 1 ]; then
-    [ "$live" = 0 ] && tmux set-option -gu @pane_notify_sidebar_open
+  if [ "$live" = 0 ] || [ "$(opt @pane-notify-sidebar on)" != on ]; then
+    tmux set-option -gu @pane_notify_sidebar_open
+  fi
+  if [ "$(tmux show-option -gqv @pane_notify_sidebar_open)" != 1 ]; then
     kill_all_sidebars
     return 0
   fi
