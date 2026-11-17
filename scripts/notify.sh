@@ -58,20 +58,23 @@ any_client_focused() {
   tmux list-clients -F '#{client_flags}' | awk '","$0"," ~ /,focused,/ { f = 1 } END { exit !f }'
 }
 
+# sgr <colour> [bg]
 sgr() {
-  local c=$1 base=30 i=0 name h
+  local c=$1 layer=3 base i=0 name h
+  [ "${2:-}" = bg ] && layer=4
+  base=$((layer * 10))
   case $c in
     \#*)
       h=${c#\#}
       [[ $h =~ ^[0-9a-fA-F]{6}$ ]] || return 0
-      printf '\033[38;2;%d;%d;%dm' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
+      printf '\033[%d8;2;%d;%d;%dm' "$layer" "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
       return 0
       ;;
     colour[0-9]*|color[0-9]*)
-      [[ ${c#colo*r} =~ ^[0-9]+$ ]] && printf '\033[38;5;%dm' "${c#colo*r}"
+      [[ ${c#colo*r} =~ ^[0-9]+$ ]] && printf '\033[%d8;5;%dm' "$layer" "${c#colo*r}"
       return 0
       ;;
-    bright*) base=90 c=${c#bright} ;;
+    bright*) base=$((base + 60)) c=${c#bright} ;;
   esac
   for name in black red green yellow blue magenta cyan white; do
     [ "$c" = "$name" ] && { printf '\033[%dm' $((base + i)); return 0; }
@@ -80,6 +83,27 @@ sgr() {
 }
 
 colour_of() { tmux display-message -p "$(opt "$1" "$2")"; }
+
+# shade rgb:R/G/B (an OSC 11 reply, 1 to 4 hex digits a channel): prints a
+# #rrggbb a little lighter than a dark background, or darker than a light one.
+shade() {
+  local spec=${1#rgb:} r g b v h l
+  [[ $spec =~ ^[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}$ ]] || return 1
+  IFS=/ read -r r g b <<<"$spec"
+  for v in r g b; do
+    h=${!v}
+    printf -v "$v" '%d' $(( 16#$h * 255 / ((1 << (4 * ${#h})) - 1) ))
+  done
+  l=$(( (299 * r + 587 * g + 114 * b) / 1000 ))
+  for v in r g b; do
+    if [ "$l" -lt 128 ]; then
+      printf -v "$v" '%d' $(( ${!v} + (255 - ${!v}) * 18 / 100 ))
+    else
+      printf -v "$v" '%d' $(( ${!v} - ${!v} * 15 / 100 ))
+    fi
+  done
+  printf '#%02x%02x%02x' "$r" "$g" "$b"
+}
 
 # Entries are the only record of unseen notifications; each window's badge
 # (@pane_notify) and the bell (@pane_notify_count) are derived from them.
@@ -357,6 +381,20 @@ sidebar_toggle() {
   fi
   tmux set-option -g @pane_notify_sidebar_open 1
   render_bar
+  focus_sidebar "$client"
+}
+
+focus_sidebar() {
+  local win id
+  if [ -n "$1" ]; then
+    win="$(tmux list-clients -F '#{client_name} #{window_id}' | awk -v c="$1" '$1 == c { print $2 }')"
+  else
+    win="$(tmux display-message -p '#{window_id}')"
+  fi
+  [ -n "$win" ] || return 0
+  id="$(tmux list-panes -t "$win" -F '#{pane_id} #{@pane_notify_sidebar}' | awk '$2 == 1 { print $1; exit }')"
+  [ -n "$id" ] && tmux select-pane -Z -t "$id"
+  return 0
 }
 
 record() {
@@ -369,7 +407,12 @@ forget() {
   render_bar
 }
 
-declare -a ROW_ENTRY=() ENTRY_ID=() ENTRY_TARGET=()
+# Sidebar state. ENTRY_* hold the entries as last loaded, newest first; SEL is
+# the index of the selected one and SEL_ID its entry id, so the selection
+# follows its entry when newer ones arrive.
+declare -a ROW_ENTRY=() ENTRY_ID=() ENTRY_TARGET=() ENTRY_WHERE=() ENTRY_LABEL=() ENTRY_DETAIL=() \
+  ENTRY_ICON=()
+SEL=0 SEL_ID="" FOCUSED=0
 
 wrap() {
   local width=$2 line="" word
@@ -394,14 +437,18 @@ wrap() {
   return 0
 }
 
+# Prints one sidebar line, on the background of the line's entry.
 put() {
-  [ "$row" -le "$rows" ] && printf '\033[%d;%dH%s' "$row" "$col" "$1"
+  [ "$row" -le "$rows" ] &&
+    printf '\033[%d;%dH%s%*s\033[%d;%dH%s\033[0m' "$row" $((col - 1)) "$bg" $((inner + 2)) "" "$row" "$col" "$1"
   row=$((row + 1))
 }
 
-sidebar_draw() {
-  local cols rows floating inner col reset=$'\033[0m' c_text c_subtle c_muted c_rule row=1 r i=0
-  read -r cols rows floating <<<"$(tmux display-message -p -t "$TMUX_PANE" '#{pane_width} #{pane_height} #{?pane_floating_flag,1,0}')"
+# Reads the pane's size and focus, the colours and the entries from tmux.
+sidebar_load() {
+  local i
+  read -r cols rows floating FOCUSED <<<"$(tmux display-message -p -t "$TMUX_PANE" \
+    '#{pane_width} #{pane_height} #{?pane_floating_flag,1,0} #{pane_active}')"
   col=2
   [ "$floating" = 1 ] && col=3
   inner=$((cols - col))
@@ -409,45 +456,106 @@ sidebar_draw() {
   c_subtle="$(sgr "$(colour_of @pane-notify-sidebar-subtle default)")"
   c_muted="$(sgr "$(colour_of @pane-notify-sidebar-muted brightblack)")"
   c_rule="$(sgr "$(colour_of @pane-notify-sidebar-rule brightblack)")"
-  ROW_ENTRY=() ENTRY_ID=() ENTRY_TARGET=()
-
-  printf '\033[H\033[2J'
-  if [ "$floating" = 1 ]; then
-    for ((r = 1; r <= rows; r++)); do printf '\033[%d;1H%s│%s' "$r" "$c_rule" "$reset"; done
+  selected_auto=""
+  if [ "$(opt @pane-notify-sidebar-selected auto)" = auto ]; then
+    selected_auto=1
+    sidebar_background "$(tmux show-option -gqv @pane_notify_selected_bg)"
+    printf '\033]11;?\033\\'
+  else
+    c_selected="$(sgr "$(colour_of @pane-notify-sidebar-selected "")" bg)"
   fi
-  entries_each draw_entry
+  ENTRY_ID=() ENTRY_TARGET=() ENTRY_WHERE=() ENTRY_LABEL=() ENTRY_DETAIL=() ENTRY_ICON=()
+  entries_each load_entry
+  for i in "${!ENTRY_ID[@]}"; do
+    [ "${ENTRY_ID[i]}" = "$SEL_ID" ] && SEL=$i
+  done
+  sidebar_select "$SEL"
 }
 
-draw_entry() {
-  local icon colour l first=1
-  icon="$(opt "@pane_notify_icon_$2" "●")"
-  colour="$(colour_of "@pane_notify_color_$2" "")"
-  ENTRY_ID[i]=$1
-  ENTRY_TARGET[i]=$6
-  while IFS= read -r l; do
-    if [ -n "$first" ]; then
-      ROW_ENTRY[row]=$i; put "$(sgr "$colour")$icon$reset $c_text$l$reset"
-      first=""
-    else
-      ROW_ENTRY[row]=$i; put "  $c_text$l$reset"
-    fi
-  done < <(wrap "$3" $((inner - 2)))
-  while IFS= read -r l; do
-    ROW_ENTRY[row]=$i; put "  $c_subtle$l$reset"
-  done < <(wrap "$4" $((inner - 2)))
-  while IFS= read -r l; do
-    ROW_ENTRY[row]=$i; put "  $c_muted$l$reset"
-  done < <(wrap "$5" $((inner - 2)))
-  row=$((row + 1))
-  i=$((i + 1))
+load_entry() {
+  local n=${#ENTRY_ID[@]}
+  ENTRY_ID[n]=$1 ENTRY_WHERE[n]=$3 ENTRY_LABEL[n]=$4 ENTRY_DETAIL[n]=$5 ENTRY_TARGET[n]=$6
+  ENTRY_ICON[n]="$(sgr "$(colour_of "@pane_notify_color_$2" "")")$(opt "@pane_notify_icon_$2" "●")"
 }
 
-sidebar_click() {
-  local i=${ROW_ENTRY[$1]:-}
-  [ -n "$i" ] || return 0
+# The selected entry's background when @pane-notify-sidebar-selected is auto:
+# a shade of the terminal's background (#rrggbb, remembered for the next
+# sidebar), or reverse video until the terminal has said what that is.
+sidebar_background() {
+  if [ -n "$1" ]; then
+    c_selected="$(sgr "$1" bg)"
+  else
+    c_selected=$'\033[7m'
+  fi
+}
+
+sidebar_reply() {
+  local colour old=$c_selected
+  [ -n "$selected_auto" ] || return 0
+  colour="$(shade "$1")" || return 0
+  [ "$(tmux show-option -gqv @pane_notify_selected_bg)" = "$colour" ] ||
+    tmux set-option -g @pane_notify_selected_bg "$colour"
+  sidebar_background "$colour"
+  [ "$c_selected" = "$old" ] || sidebar_paint
+}
+
+sidebar_select() {
+  SEL=$1
+  [ "$SEL" -lt "${#ENTRY_ID[@]}" ] || SEL=$((${#ENTRY_ID[@]} - 1))
+  [ "$SEL" -ge 0 ] || SEL=0
+  SEL_ID=${ENTRY_ID[SEL]:-}
+}
+
+sidebar_paint() {
+  local row=1 r i bg l first fg=$'\033[39m'
+  ROW_ENTRY=()
+  printf '\033[0m\033[H\033[2J'
+  if [ "$floating" = 1 ]; then
+    for ((r = 1; r <= rows; r++)); do printf '\033[%d;1H%s│\033[0m' "$r" "$c_rule"; done
+  fi
+  for i in "${!ENTRY_ID[@]}"; do
+    bg=""
+    [ "$FOCUSED" = 1 ] && [ "$i" = "$SEL" ] && bg=$c_selected
+    first=1
+    while IFS= read -r l; do
+      ROW_ENTRY[row]=$i
+      if [ -n "$first" ]; then
+        put "${ENTRY_ICON[i]}$fg $c_text$l"
+        first=""
+      else
+        put "  $c_text$l"
+      fi
+    done < <(wrap "${ENTRY_WHERE[i]}" $((inner - 2)))
+    while IFS= read -r l; do
+      ROW_ENTRY[row]=$i; put "  $c_subtle$l"
+    done < <(wrap "${ENTRY_LABEL[i]}" $((inner - 2)))
+    while IFS= read -r l; do
+      ROW_ENTRY[row]=$i; put "  $c_muted$l"
+    done < <(wrap "${ENTRY_DETAIL[i]}" $((inner - 2)))
+    row=$((row + 1))
+  done
+}
+
+sidebar_move() {
+  [ "${#ENTRY_ID[@]}" -gt 0 ] || return 0
+  FOCUSED=1
+  sidebar_select $((SEL + $1))
+  sidebar_paint
+}
+
+sidebar_open() {
+  local i=$1
+  [ -n "${ENTRY_ID[i]:-}" ] || return 0
   tmux last-pane -t "$TMUX_PANE" 2>/dev/null
   entries_drop "${ENTRY_ID[i]}"
   tmux switch-client -t "${ENTRY_TARGET[i]}" 2>/dev/null
+  tmux run-shell -b "'$self' bar-refresh"
+}
+
+sidebar_remove() {
+  local i=$1
+  [ -n "${ENTRY_ID[i]:-}" ] || return 0
+  entries_drop "${ENTRY_ID[i]}"
   tmux run-shell -b "'$self' bar-refresh"
 }
 
@@ -456,17 +564,33 @@ sidebar_close() {
   exit 0
 }
 
-# Reads keys until one means something and prints it: redraw, quit or
-# click <row>. Returns 1 at end of input.
+# Reads keys until one means something and prints it: redraw, quit, up, down,
+# open, remove, click <row> or bg <colour> (the reply to an OSC 11 query).
+# Returns 1 at end of input.
 sidebar_decode() {
   local c seq o b y
-  IFS= read -rsn1 c || return 1
+  IFS= read -rsn1 -d '' c || return 1
   while :; do
     case $c in
       R) echo redraw; return 0 ;;
       q) echo quit; return 0 ;;
+      x) echo remove; return 0 ;;
+      $'\r'|$'\n') echo open; return 0 ;;
       $'\033')
-        IFS= read -rsn1 c || return 1
+        IFS= read -rsn1 -d '' c || return 1
+        if [ "$c" = ']' ]; then
+          seq=""
+          while IFS= read -rsn1 -d '' c; do
+            case $c in
+              $'\a') break ;;
+              $'\033') IFS= read -rsn1 -d '' c; break ;;
+            esac
+            seq="$seq$c"
+          done
+          [[ $seq == 11\;* ]] && { echo "bg ${seq#11;}"; return 0; }
+          IFS= read -rsn1 -d '' c || return 1
+          continue
+        fi
         [ "$c" = '[' ] || continue
         seq=""
         while IFS= read -rsn1 c; do
@@ -474,26 +598,40 @@ sidebar_decode() {
           printf -v o '%d' "'$c"
           [ "$o" -ge 64 ] && [ "$o" -le 126 ] && break
         done
-        if [[ $seq == '<'*M ]]; then
-          IFS=';' read -r b _ y <<<"${seq#<}"
-          [ "$b" = 0 ] && { echo "click ${y%M}"; return 0; }
-        fi
+        case $seq in
+          A) echo up; return 0 ;;
+          B) echo down; return 0 ;;
+          I|O) echo redraw; return 0 ;;
+          '<'*M)
+            IFS=';' read -r b _ y <<<"${seq#<}"
+            [ "$b" = 0 ] && { echo "click ${y%M}"; return 0; }
+            ;;
+        esac
         ;;
     esac
-    IFS= read -rsn1 c || return 1
+    IFS= read -rsn1 -d '' c || return 1
   done
 }
 
 sidebar() {
-  local event
+  local event cols rows floating col inner c_text c_subtle c_muted c_rule c_selected selected_auto i
   trap sidebar_close INT
-  printf '\033[?25l\033[?7l\033[?1000h\033[?1006h'
-  sidebar_draw
+  printf '\033[?25l\033[?7l\033[?1000h\033[?1006h\033[?1004h'
+  sidebar_load
+  sidebar_paint
   while event="$(sidebar_decode)"; do
     case $event in
-      redraw) sidebar_draw ;;
+      redraw) sidebar_load; sidebar_paint ;;
       quit) sidebar_close ;;
-      click\ *) sidebar_click "${event#click }" ;;
+      up) sidebar_move -1 ;;
+      down) sidebar_move 1 ;;
+      open) sidebar_open "$SEL" ;;
+      remove) sidebar_remove "$SEL" ;;
+      bg\ *) sidebar_reply "${event#bg }" ;;
+      click\ *)
+        i=${ROW_ENTRY[${event#click }]:-}
+        [ -z "$i" ] || sidebar_open "$i"
+        ;;
     esac
   done
 }

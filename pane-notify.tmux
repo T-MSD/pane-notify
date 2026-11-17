@@ -8,6 +8,9 @@
 #   @pane-notify-sidebar-{text,subtle,muted,rule}
 #                                             sidebar colours (default, default,
 #                                             brightblack, brightblack)
+#   @pane-notify-sidebar-selected             background of the selected sidebar
+#                                             entry (auto = a shade of the
+#                                             terminal's background)
 #   @pane-notify-key                          prefix key for the sidebar (a); off = none
 #   @pane-notify-auto-format                  on = add the badge and bell to the
 #                                             status formats (on)
