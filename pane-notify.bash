@@ -90,10 +90,10 @@ else
   # trap -p prints "trap -- '<command>' DEBUG", quoted for reuse.
   _pane_notify_chain_trap() {
     eval "set -- $(trap -p DEBUG)"
+    # shellcheck disable=SC2064 # the existing command, expanded now
     case ${3:-} in
       *_pane_notify_debug*) ;;
       "") trap '_pane_notify_debug' DEBUG ;;
-      # shellcheck disable=SC2064 # the existing command, expanded now
       *) trap "_pane_notify_debug; $3" DEBUG ;;
     esac
   }

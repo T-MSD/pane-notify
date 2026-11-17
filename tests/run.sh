@@ -12,7 +12,10 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 N="$ROOT/scripts/notify.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/pane-notify-test.XXXXXX")"
-IN="pn-test-$$" OUT="pn-outer-$$"
+# Each setup gets new server names: starting a server under the name of one
+# that is still shutting down fails on Linux.
+RUN=0
+IN="pn-test-$$-0" OUT="pn-outer-$$-0"
 VERBOSE=${1:-}
 RESULTS="$WORK/results"
 
@@ -62,6 +65,16 @@ drawn() { T capture-pane -p -t "$1" | grep -ac '●'; }
 client_window() { T list-clients -F '#{window_name}'; }
 # Sidebars in window main that are floating (11) or split (10).
 sidebar_kind() { T list-panes -t a:0 -F '#{@pane_notify_sidebar}#{?pane_floating_flag,1,0}' | grep -c "^$1\$"; }
+# Waits until only a sidebar of kind $1 is left and no render holds the lock:
+# replacing one kind with the other unzooms the window for a moment.
+lockdir() { echo "${TMPDIR:-/tmp}/pane-notify-$(id -u)-$(T display -p '#{pid}').lock"; }
+settle_kind() {
+  local other=10
+  [ "$1" = 10 ] && other=11
+  wait_for "[ \"\$(sidebar_kind $1)\" = 1 ] && [ \"\$(sidebar_kind $other)\" = 0 ] && [ ! -d \"\$(lockdir)\" ]" 8
+  sleep 0.3
+  wait_for '[ ! -d "$(lockdir)" ]'
+}
 
 # Inner server: session "a" with windows main (viewed) and w1..w5; an outer
 # server whose pane runs the inner client, so the client has a real terminal
@@ -69,6 +82,8 @@ sidebar_kind() { T list-panes -t a:0 -F '#{@pane_notify_sidebar}#{?pane_floating
 setup() {
   T kill-server 2>/dev/null
   O kill-server 2>/dev/null
+  RUN=$((RUN + 1))
+  IN="pn-test-$$-$RUN" OUT="pn-outer-$$-$RUN"
   : > "$WORK/out.raw"
   T -f /dev/null new-session -d -s a -n main -x 120 -y 30
   T set -g focus-events on \; set -g mouse on \; set -g base-index 0 \
@@ -117,7 +132,15 @@ expect "window format gets the badge" "$(T show -gwv window-status-format | grep
 T run-shell "'$ROOT/pane-notify.tmux'"
 expect "reload does not add the badge twice" \
   "$(T show -gwv window-status-current-format | grep -o '@pane-notify-badge' | wc -l | tr -d ' ')" 1
-expect "follow hooks installed" "$(T show-hooks -g | grep -c 'bar-refresh')" 6
+# Every follow hook this tmux supports (3.2 lacks some), in either scope.
+missing=""
+for h in session-window-changed client-session-changed client-focus-in window-unlinked \
+         after-resize-pane pane-exited after-kill-pane; do
+  T set-hook -g "${h}[99]" 'display x' 2>/dev/null || continue
+  T set-hook -gu "${h}[99]"
+  { T show-hooks -g "$h"; T show-hooks -gw "$h"; } 2>/dev/null | grep -q bar-refresh || missing="$missing $h"
+done
+expect "follow hooks installed" "$missing" ""
 
 setup "@pane-notify-auto-format off" "@pane-notify-key off"
 expect "auto-format off leaves status-right alone" "$(T show -gv status-right | grep -c '@pane-notify-status')" 0
@@ -133,7 +156,7 @@ notify a:3 process 0 12 $'for i in 1 2\ndo sleep 1; done'
 expect "multi-line command keeps its entry" "$(count)" 1
 expect "newlines stored as spaces" "$(T show -gv @pane_notify_entry_1 | tr '\037' '|')" \
   "done|w3|finished in 12s|for i in 1 2 do sleep 1; done|$(T display -p -t a:3 '#{window_id}')"
-expect "badge set on the window" "$(T show -wv -t a:3 @pane_notify)" done
+expect "badge set on the window" "$(T show -wv -t a:3 @pane_notify)" "done"
 notify a:2 process 1 75 make
 notify a:3 process 0 12 again
 expect "newer entry from the same window replaces the old" "$(entries)" 2
@@ -244,7 +267,7 @@ open_and_close
 expect "three uneven columns get their widths back" "$(widths)" "$before"
 if [ "$(T show -gqv @pane_notify_floating)" = 1 ]; then
   before="$(widths)"
-  open_and_close 'T resize-pane -Z -t a:0.0; wait_for "[ \"\$(sidebar_kind 11)\" = 1 ]"; T resize-pane -Z -t a:0.0; wait_for "[ \"\$(sidebar_kind 10)\" = 1 ]"'
+  open_and_close 'settle_kind 10; T resize-pane -Z -t a:0.0; settle_kind 11; T resize-pane -Z -t a:0.0; settle_kind 10'
   expect "and after a zoom and unzoom while open" "$(widths)" "$before"
 fi
 
@@ -254,12 +277,13 @@ notify a:1 process 0 12 one
 toggle
 wait_for '[ -n "$(sidebar_in a:0)" ]'
 if [ "$(T show -gqv @pane_notify_floating)" = 1 ]; then
+  settle_kind 10
   T resize-pane -Z -t a:0.0
-  wait_for '[ "$(sidebar_kind 11)" = 1 ]'
+  settle_kind 11
   expect "zooming the only real pane keeps the zoom" "$(T display -p -t a:0 '#{window_zoomed_flag}')" 1
   expect "and floats the sidebar" "$(sidebar_kind 11)" 1
   T resize-pane -Z -t a:0.0
-  wait_for '[ "$(sidebar_kind 10)" = 1 ]'
+  settle_kind 10
   expect "unzooming brings the split back" "$(sidebar_kind 10)" 1
 else
   skipped "floating sidebar in zoomed windows" "tmux $(tmux -V | cut -d' ' -f2) < 3.8"

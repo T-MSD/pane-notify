@@ -557,7 +557,7 @@ main() {
       status=$2 seconds=$3 cmd=$4
       took="$(human_duration "$seconds")"
       if [ "$status" -eq 0 ]; then
-        notify done "finished in $took" "$cmd"
+        notify "done" "finished in $took" "$cmd"
       else
         notify failed "failed ($status) after $took" "$cmd"
       fi
