@@ -128,7 +128,7 @@ setup
   row() { printf '%s|%s|%s|%s|%s|%s\n' "$@"; }
   fields() { entries_each row | cut -d'|' -f"$1" | tr '\n' ' '; }
   w0="$(T display -p -t a:0 '#{window_id}')" w2="$(T display -p -t a:2 '#{window_id}')" w3="$(T display -p -t a:3 '#{window_id}')"
-  entries_add done w2 finished "make all" "$w2"
+  entries_add "done" w2 finished "make all" "$w2"
   entries_add failed w3 "failed (1)" "make test" "$w3"
   expect "entries_each lists newest first, field by field" "$(fields 2-6)" \
     "failed|w3|failed (1)|make test|$w3 done|w2|finished|make all|$w2 "
@@ -138,8 +138,8 @@ setup
   expect "entries_drop takes an entry id" "$(fields 6)" "$w3 "
   entries_drop "$w3"
   expect "entries_drop takes a window id" "$(fields 6)" ""
-  entries_add done w0 finished x "$w0"
-  entries_add done w2 finished x "$w2"
+  entries_add "done" w0 finished x "$w0"
+  entries_add "done" w2 finished x "$w2"
   entries_add failed w3 failed x "$w3"
   T set -g @pane-notify-bar-max 1
   expect "entries_prune prints what is left" "$(entries_prune)" 1
@@ -250,7 +250,7 @@ wait_for '[ "$(client_window)" = w4 ]'
 expect "clicking an entry opens its window" "$(client_window)" w4
 wait_for '[ "$(count)" = 3 ]'
 expect "and removes the entry" "$(count)" 3
-wait_for '[ -n "$(sidebar_in a:4)" ]'
+wait_for '[ -n "$(sidebar_in a:4)" ] && [ -z "$(sidebar_in a:0)" ]'
 expect "the sidebar follows to the new window" "$([ -n "$(sidebar_in a:4)" ] && [ -z "$(sidebar_in a:0)" ] && echo yes)" yes
 
 settled() { wait_for '[ -n "$(sidebars)" ] && [ "$(drawn "$(sidebars)")" -gt 0 ]'; sleep 0.8; }
