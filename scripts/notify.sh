@@ -58,7 +58,6 @@ any_client_focused() {
   tmux list-clients -F '#{client_flags}' | awk '","$0"," ~ /,focused,/ { f = 1 } END { exit !f }'
 }
 
-# sgr <colour> [bg]
 sgr() {
   local c=$1 layer=3 base i=0 name h
   [ "${2:-}" = bg ] && layer=4
@@ -84,8 +83,6 @@ sgr() {
 
 colour_of() { tmux display-message -p "$(opt "$1" "$2")"; }
 
-# shade rgb:R/G/B (an OSC 11 reply, 1 to 4 hex digits a channel): prints a
-# #rrggbb a little lighter than a dark background, or darker than a light one.
 shade() {
   local spec=${1#rgb:} r g b v h l
   [[ $spec =~ ^[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}$ ]] || return 1
@@ -104,15 +101,6 @@ shade() {
   done
   printf '#%02x%02x%02x' "$r" "$g" "$b"
 }
-
-# Entries are the only record of unseen notifications; each window's badge
-# (@pane_notify) and the bell (@pane_notify_count) are derived from them.
-#   entries_add <state> <where> <label> <detail> <window>
-#   entries_drop <entry-id | window-id>
-#   entries_prune    drop what is in view, gone or beyond bar-max, update the
-#                    badges and the bell, print how many entries are left
-#   entries_each <fn>
-#                    call fn id state where label detail window, newest first
 
 entry_ids() {
   tmux show-options -g | awk -v p="$ENTRY_PREFIX" 'index($1, p) == 1 { print substr($1, length(p) + 1) }' \
@@ -407,12 +395,9 @@ forget() {
   render_bar
 }
 
-# Sidebar state. ENTRY_* hold the entries as last loaded, newest first; SEL is
-# the index of the selected one and SEL_ID its entry id, so the selection
-# follows its entry when newer ones arrive.
 declare -a ROW_ENTRY=() ENTRY_ID=() ENTRY_TARGET=() ENTRY_WHERE=() ENTRY_LABEL=() ENTRY_DETAIL=() \
   ENTRY_ICON=()
-SEL=0 SEL_ID="" FOCUSED=0
+SEL=0 SEL_WINDOW="" FOCUSED=0 BG_SEEN=""
 
 wrap() {
   local width=$2 line="" word
@@ -437,14 +422,12 @@ wrap() {
   return 0
 }
 
-# Prints one sidebar line, on the background of the line's entry.
 put() {
   [ "$row" -le "$rows" ] &&
     printf '\033[%d;%dH%s%*s\033[%d;%dH%s\033[0m' "$row" $((col - 1)) "$bg" $((inner + 2)) "" "$row" "$col" "$1"
   row=$((row + 1))
 }
 
-# Reads the pane's size and focus, the colours and the entries from tmux.
 sidebar_load() {
   local i
   read -r cols rows floating FOCUSED <<<"$(tmux display-message -p -t "$TMUX_PANE" \
@@ -460,14 +443,14 @@ sidebar_load() {
   if [ "$(opt @pane-notify-sidebar-selected auto)" = auto ]; then
     selected_auto=1
     sidebar_background "$(tmux show-option -gqv @pane_notify_selected_bg)"
-    printf '\033]11;?\033\\'
+    printf '\033]11;?\033\\\033[c'
   else
     c_selected="$(sgr "$(colour_of @pane-notify-sidebar-selected "")" bg)"
   fi
   ENTRY_ID=() ENTRY_TARGET=() ENTRY_WHERE=() ENTRY_LABEL=() ENTRY_DETAIL=() ENTRY_ICON=()
   entries_each load_entry
   for i in "${!ENTRY_ID[@]}"; do
-    [ "${ENTRY_ID[i]}" = "$SEL_ID" ] && SEL=$i
+    [ "${ENTRY_TARGET[i]}" = "$SEL_WINDOW" ] && SEL=$i
   done
   sidebar_select "$SEL"
 }
@@ -478,9 +461,6 @@ load_entry() {
   ENTRY_ICON[n]="$(sgr "$(colour_of "@pane_notify_color_$2" "")")$(opt "@pane_notify_icon_$2" "●")"
 }
 
-# The selected entry's background when @pane-notify-sidebar-selected is auto:
-# a shade of the terminal's background (#rrggbb, remembered for the next
-# sidebar), or reverse video until the terminal has said what that is.
 sidebar_background() {
   if [ -n "$1" ]; then
     c_selected="$(sgr "$1" bg)"
@@ -490,11 +470,20 @@ sidebar_background() {
 }
 
 sidebar_reply() {
-  local colour old=$c_selected
+  local colour="" old=$c_selected
+  if [ "$1" = da ]; then
+    [ -z "$BG_SEEN" ] || { BG_SEEN=""; return 0; }
+  else
+    colour="$(shade "$1")" || return 0
+    BG_SEEN=1
+  fi
   [ -n "$selected_auto" ] || return 0
-  colour="$(shade "$1")" || return 0
-  [ "$(tmux show-option -gqv @pane_notify_selected_bg)" = "$colour" ] ||
-    tmux set-option -g @pane_notify_selected_bg "$colour"
+  if [ -n "$colour" ]; then
+    [ "$(tmux show-option -gqv @pane_notify_selected_bg)" = "$colour" ] ||
+      tmux set-option -g @pane_notify_selected_bg "$colour"
+  else
+    tmux set-option -gu @pane_notify_selected_bg
+  fi
   sidebar_background "$colour"
   [ "$c_selected" = "$old" ] || sidebar_paint
 }
@@ -503,7 +492,7 @@ sidebar_select() {
   SEL=$1
   [ "$SEL" -lt "${#ENTRY_ID[@]}" ] || SEL=$((${#ENTRY_ID[@]} - 1))
   [ "$SEL" -ge 0 ] || SEL=0
-  SEL_ID=${ENTRY_ID[SEL]:-}
+  SEL_WINDOW=${ENTRY_TARGET[SEL]:-}
 }
 
 sidebar_paint() {
@@ -556,6 +545,8 @@ sidebar_remove() {
   local i=$1
   [ -n "${ENTRY_ID[i]:-}" ] || return 0
   entries_drop "${ENTRY_ID[i]}"
+  sidebar_load
+  sidebar_paint
   tmux run-shell -b "'$self' bar-refresh"
 }
 
@@ -564,9 +555,6 @@ sidebar_close() {
   exit 0
 }
 
-# Reads keys until one means something and prints it: redraw, quit, up, down,
-# open, remove, click <row> or bg <colour> (the reply to an OSC 11 query).
-# Returns 1 at end of input.
 sidebar_decode() {
   local c seq o b y
   IFS= read -rsn1 -d '' c || return 1
@@ -602,6 +590,7 @@ sidebar_decode() {
           A) echo up; return 0 ;;
           B) echo down; return 0 ;;
           I|O) echo redraw; return 0 ;;
+          '?'*c) echo "bg da"; return 0 ;;
           '<'*M)
             IFS=';' read -r b _ y <<<"${seq#<}"
             [ "$b" = 0 ] && { echo "click ${y%M}"; return 0; }

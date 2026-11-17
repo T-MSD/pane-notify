@@ -16,9 +16,6 @@ RUN=0
 IN="pn-test-$$-0" OUT="pn-outer-$$-0"
 VERBOSE=${1:-}
 RESULTS="$WORK/results"
-# The outer terminal's background, and how the sidebar highlights on it: a
-# shade of it where tmux (3.4+) passes the terminal's colour on, reverse video
-# otherwise.
 OUTER_BG='#20242c'
 TMUX_VERSION="$(tmux -V | sed -E 's/^tmux (next-)?//; s/^([0-9]+)\.([0-9]+).*/\1 \2/' | awk '{ print $1 * 100 + $2 }')"
 REVERSE=$'\e\\[7m'
@@ -135,6 +132,7 @@ section "functions"
   expect "shade rejects other formats" "$(shade '#ffffff' || echo rejected)" rejected
   expect "decode: OSC 11 reply with ST" "$(printf '\e]11;rgb:2020/2424/2c2c\e\\' | sidebar_decode)" "bg rgb:2020/2424/2c2c"
   expect "decode: OSC 11 reply with BEL" "$(printf '\e]11;rgb:ff/ff/ff\aq' | { sidebar_decode; sidebar_decode; } | tr '\n' ' ')" "bg rgb:ff/ff/ff quit "
+  expect "decode: DA1 reply" "$(printf '\e[?1;2c' | sidebar_decode)" "bg da"
   expect "decode: other OSC replies are skipped" "$(printf '\e]10;rgb:0/0/0\aq' | sidebar_decode)" quit
   expect "decode: focus changes redraw" "$(printf '\e[I\e[O' | { sidebar_decode; sidebar_decode; } | tr '\n' ' ')" "redraw redraw "
   expect "decode: lone Esc keeps the key" "$(printf '\eq' | sidebar_decode)" quit
@@ -332,6 +330,9 @@ expect "nothing is highlighted while another pane is focused" "$(highlighted "$s
 T select-pane -t "$sb"
 wait_for '[ "$(highlighted "$sb")" = w3 ]'
 expect "focusing the sidebar highlights the selection again" "$(highlighted "$sb")" w3
+T send-keys -t "$sb" Up
+sleep 0.3
+expect "Up stops at the first entry" "$(highlighted "$sb")" w3
 T send-keys -t "$sb" Down
 wait_for '[ "$(highlighted "$sb")" = w2 ]'
 expect "Down selects the next entry" "$(highlighted "$sb")" w2
@@ -342,18 +343,21 @@ expect "Down stops at the last entry" "$(highlighted "$sb")" w1
 T send-keys -t "$sb" Up
 wait_for '[ "$(highlighted "$sb")" = w2 ]'
 expect "Up selects the previous entry" "$(highlighted "$sb")" w2
+notify a:2 process 0 12 two-again
+wait_for '[ "$(T capture-pane -p -t "$sb" | grep -c two-again)" = 1 ]'
+expect "the selection stays on a window that notifies again" "$(highlighted "$sb")" w2
 T send-keys -t "$sb" x
 wait_for '[ "$(count)" = 2 ] && [ "$(drawn "$sb")" = 2 ]'
 expect "x removes the selected entry" "$(count)|$(T show -wqv -t a:2 @pane_notify)|$(client_window)" "2||main"
-wait_for '[ "$(highlighted "$sb")" = w1 ]'
-expect "and selects the entry below it" "$(highlighted "$sb")" w1
+wait_for '[ "$(highlighted "$sb")" = w3 ]'
+expect "and selects the entry below it" "$(highlighted "$sb")" w3
 T select-pane -t a:0.0
 wait_for '[ -z "$(highlighted "$sb")" ]'
 expect "leaving the sidebar hides the highlight" "$(highlighted "$sb")" ""
 T select-pane -t "$sb"
-wait_for '[ "$(highlighted "$sb")" = w1 ]'
-expect "and coming back keeps the selection" "$(highlighted "$sb")" w1
-T send-keys -t "$sb" Up Enter
+wait_for '[ "$(highlighted "$sb")" = w3 ]'
+expect "and coming back keeps the selection" "$(highlighted "$sb")" w3
+T send-keys -t "$sb" Enter
 wait_for '[ "$(client_window)" = w3 ]'
 expect "Enter opens the selected entry's window" "$(client_window)" w3
 wait_for '[ "$(count)" = 1 ]'
@@ -366,6 +370,16 @@ else
   skipped "the highlight is a shade of the terminal's background" "tmux < 3.4 does not report it"
 fi
 
+setup
+notify a:1 process 0 12 one
+notify a:2 process 0 12 two
+notify a:3 process 0 12 three
+toggle
+wait_for '[ "$(highlighted "$(sidebar_in a:0)")" = w3 ]'
+T send-keys -t "$(sidebar_in a:0)" x x
+wait_for '[ "$(count)" = 1 ]'
+sleep 0.5
+expect "x pressed twice in a row removes two entries" "$(count)|$(T show -wqv -t a:1 @pane_notify)" "1|done"
 setup "@pane-notify-sidebar-selected '#405060'"
 notify a:1 process 0 12 one
 toggle
@@ -378,6 +392,19 @@ notify a:1 process 0 12 one
 toggle
 wait_for '[ "$(highlighted "$(sidebar_in a:0)" "$REVERSE")" = w1 ]'
 expect "without a known background it uses reverse video" "$(highlighted "$(sidebar_in a:0)" "$REVERSE")" w1
+toggle
+wait_for '[ -z "$(sidebars)" ]'
+T set -g window-style 'bg=#123456'
+toggle
+wait_for '[ "$(highlighted "$(sidebar_in a:0)" "48;2;60;88;116m")" = w1 ]'
+expect "a pane style's background is shaded" "$(T show -gqv @pane_notify_selected_bg)" '#3c5874'
+toggle
+wait_for '[ -z "$(sidebars)" ]'
+T set -gu window-style
+toggle
+wait_for '[ "$(highlighted "$(sidebar_in a:0)" "$REVERSE")" = w1 ]'
+expect "and once nothing reports one, reverse video comes back" \
+  "$(highlighted "$(sidebar_in a:0)" "$REVERSE")|$(T show -gqv @pane_notify_selected_bg)" "w1|"
 OUTER_BG='#20242c'
 
 section "pane widths after the sidebar closes"

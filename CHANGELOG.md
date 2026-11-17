@@ -10,7 +10,8 @@ First release.
   entry to open its window, `q` or Ctrl-C to close it.
 - Keyboard navigation in the sidebar: opening it focuses it, arrow keys select
   an entry, highlighted with a shade of the terminal's background, `Enter`
-  opens its window and `x` removes it.
+  opens its window and `x` removes it. `@pane-notify-sidebar-selected` sets the
+  highlight colour instead.
 - Floating sidebar in zoomed windows on tmux 3.8+.
 - Closing the sidebar restores the widths of the window's columns.
 - Desktop notifications over OSC 9, OSC 777 or OSC 99.
