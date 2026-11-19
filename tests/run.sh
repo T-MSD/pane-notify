@@ -507,6 +507,8 @@ if command -v jq >/dev/null; then
     "Remove the build directory"
   echo '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}' | notify a:4 codex
   expect "PermissionRequest falls back to the tool name" "$(T show -gv @pane_notify_entry_3 | field 4)" "Bash"
+  echo '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":"ls"}' | notify a:4 codex
+  expect "and when tool_input is not an object" "$(T show -gv @pane_notify_entry_4 | field 4)" "Bash"
   echo '{"hook_event_name":"UserPromptSubmit","prompt":"next"}' | notify a:2 codex
   expect "UserPromptSubmit clears the window" "$(T show -wqv -t a:2 @pane_notify) $(count)" " 2"
   expect "hooks print nothing" "$(echo '{"hook_event_name":"Stop"}' | notify a:2 codex)" ""

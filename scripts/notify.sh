@@ -673,7 +673,7 @@ desktop_notify() {
   done < <(tmux list-clients -F '#{client_tty}')
 }
 
-agent_name() {
+agent_label() {
   case "$1" in
     claude) echo Claude ;;
     codex)  echo Codex ;;
@@ -681,21 +681,21 @@ agent_name() {
 }
 
 agent_event() {
-  local name=$1 input event message
+  local agent=$1 input event message
   command -v jq >/dev/null || return 0
   input="$(cat)"
   event="$(jq -r '.hook_event_name // empty' <<<"$input")"
   case "$event" in
     Stop)
-      notify waiting "$name is waiting for input" ""
+      notify waiting "$agent is waiting for input" ""
       ;;
     Notification)
       message="$(jq -r '.message // empty' <<<"$input")"
-      notify waiting "${message:-$name needs you}" ""
+      notify waiting "${message:-$agent needs you}" ""
       ;;
     PermissionRequest)
-      message="$(jq -r '.tool_input.description // .tool_name // empty' <<<"$input")"
-      notify waiting "$name needs your approval" "$message"
+      message="$(jq -r '.tool_input.description? // .tool_name // empty' <<<"$input")"
+      notify waiting "$agent needs your approval" "$message"
       ;;
     UserPromptSubmit)
       if [ -n "$(tmux show-option -gqv @pane_notify_count)" ]; then
@@ -708,7 +708,7 @@ agent_event() {
 main() {
   local locale_name status seconds cmd took agent
   [ -n "${TMUX:-}" ] || return 0
-  agent="$(agent_name "${1:-}")"
+  agent="$(agent_label "${1:-}")"
   if [ "${1:-}" = process ] || [ -n "$agent" ]; then
     [ -n "${TMUX_PANE:-}" ] || return 0
     pane=$TMUX_PANE
