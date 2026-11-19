@@ -396,6 +396,12 @@ toggle
 wait_for '[ "$(highlighted "$(sidebar_in a:0)" "48;2;64;80;96m")" = w1 ]'
 expect "the highlight colour is an option" "$(eventually 'highlighted "$(sidebar_in a:0)" "48;2;64;80;96m"' w1)" w1
 
+setup "@pane-notify-sidebar-selected '#abc'"
+notify a:1 process 0 12 one
+toggle
+expect "an unreadable highlight colour falls back to reverse video" \
+  "$(eventually 'highlighted "$(sidebar_in a:0)" "$REVERSE"' w1)" w1
+
 OUTER_BG=""
 setup
 notify a:1 process 0 12 one

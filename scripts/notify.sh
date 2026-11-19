@@ -458,6 +458,7 @@ sidebar_load() {
     printf '\033]11;?\033\\\033[c'
   else
     c_selected="$(sgr "$(colour_of @pane-notify-sidebar-selected "")" bg)"
+    [ -n "$c_selected" ] || c_selected=$'\033[7m'
   fi
   ENTRY_ID=() ENTRY_TARGET=() ENTRY_WHERE=() ENTRY_LABEL=() ENTRY_DETAIL=() ENTRY_ICON=()
   entries_each load_entry
