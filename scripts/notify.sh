@@ -681,21 +681,21 @@ agent_label() {
 }
 
 agent_event() {
-  local agent=$1 input event message
+  local label=$1 input event message
   command -v jq >/dev/null || return 0
   input="$(cat)"
   event="$(jq -r '.hook_event_name // empty' <<<"$input")"
   case "$event" in
     Stop)
-      notify waiting "$agent is waiting for input" ""
+      notify waiting "$label is waiting for input" ""
       ;;
     Notification)
       message="$(jq -r '.message // empty' <<<"$input")"
-      notify waiting "${message:-$agent needs you}" ""
+      notify waiting "${message:-$label needs you}" ""
       ;;
     PermissionRequest)
       message="$(jq -r '.tool_input.description? // .tool_name // empty' <<<"$input")"
-      notify waiting "$agent needs your approval" "$message"
+      notify waiting "$label needs your approval" "$message"
       ;;
     UserPromptSubmit)
       if [ -n "$(tmux show-option -gqv @pane_notify_count)" ]; then
@@ -706,10 +706,10 @@ agent_event() {
 }
 
 main() {
-  local locale_name status seconds cmd took agent
+  local locale_name status seconds cmd took label
   [ -n "${TMUX:-}" ] || return 0
-  agent="$(agent_label "${1:-}")"
-  if [ "${1:-}" = process ] || [ -n "$agent" ]; then
+  label="$(agent_label "${1:-}")"
+  if [ "${1:-}" = process ] || [ -n "$label" ]; then
     [ -n "${TMUX_PANE:-}" ] || return 0
     pane=$TMUX_PANE
   fi
@@ -736,7 +736,7 @@ main() {
       sidebar
       ;;
     *)
-      [ -z "$agent" ] || agent_event "$agent"
+      [ -z "$label" ] || agent_event "$label"
       ;;
   esac
 }
