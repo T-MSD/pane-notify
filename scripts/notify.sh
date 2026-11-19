@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #   notify.sh process <exit-status> <seconds> <command>   (shell hooks)
-#   notify.sh claude                                      (Claude Code hooks, JSON on stdin)
+#   notify.sh claude|codex                                (agent hooks, JSON on stdin)
 #   notify.sh bar-refresh                                 (tmux hooks)
 #   notify.sh sidebar-toggle [client]                     (key binding)
 #   notify.sh sidebar                                     (runs inside the sidebar pane)
@@ -673,15 +673,46 @@ desktop_notify() {
   done < <(tmux list-clients -F '#{client_tty}')
 }
 
-main() {
-  local locale_name status seconds cmd took input event message
-  [ -n "${TMUX:-}" ] || return 0
-  case "${1:-}" in
-    process|claude)
-      [ -n "${TMUX_PANE:-}" ] || return 0
-      pane=$TMUX_PANE
+agent_label() {
+  case "$1" in
+    claude) echo Claude ;;
+    codex)  echo Codex ;;
+  esac
+}
+
+agent_event() {
+  local label=$1 input event message
+  command -v jq >/dev/null || return 0
+  input="$(cat)"
+  event="$(jq -r '.hook_event_name // empty' <<<"$input")"
+  case "$event" in
+    Stop)
+      notify waiting "$label is waiting for input" ""
+      ;;
+    Notification)
+      message="$(jq -r '.message // empty' <<<"$input")"
+      notify waiting "${message:-$label needs you}" ""
+      ;;
+    PermissionRequest)
+      message="$(jq -r '.tool_input.description? // .tool_name // empty' <<<"$input")"
+      notify waiting "$label needs your approval" "$message"
+      ;;
+    UserPromptSubmit)
+      if [ -n "$(tmux show-option -gqv @pane_notify_count)" ]; then
+        with_lock forget "$(tmux display-message -p -t "$pane" '#{window_id}')"
+      fi
       ;;
   esac
+}
+
+main() {
+  local locale_name status seconds cmd took label
+  [ -n "${TMUX:-}" ] || return 0
+  label="$(agent_label "${1:-}")"
+  if [ "${1:-}" = process ] || [ -n "$label" ]; then
+    [ -n "${TMUX_PANE:-}" ] || return 0
+    pane=$TMUX_PANE
+  fi
   locale_name="$(utf8_locale)"
   [ -z "$locale_name" ] || export LC_ALL="$locale_name"
 
@@ -695,25 +726,6 @@ main() {
         notify failed "failed ($status) after $took" "$cmd"
       fi
       ;;
-    claude)
-      command -v jq >/dev/null || return 0
-      input="$(cat)"
-      event="$(jq -r '.hook_event_name // empty' <<<"$input")"
-      case "$event" in
-        Stop)
-          notify waiting "Claude is waiting for input" ""
-          ;;
-        Notification)
-          message="$(jq -r '.message // empty' <<<"$input")"
-          notify waiting "${message:-Claude needs you}" ""
-          ;;
-        UserPromptSubmit)
-          if [ -n "$(tmux show-option -gqv @pane_notify_count)" ]; then
-            with_lock forget "$(tmux display-message -p -t "$pane" '#{window_id}')"
-          fi
-          ;;
-      esac
-      ;;
     bar-refresh)
       with_lock render_bar
       ;;
@@ -722,6 +734,9 @@ main() {
       ;;
     sidebar)
       sidebar
+      ;;
+    *)
+      [ -z "$label" ] || agent_event "$label"
       ;;
   esac
 }

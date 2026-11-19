@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.tmux/plugins/pane-notify/scripts/notify.sh\" codex", "timeout": 5 }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.tmux/plugins/pane-notify/scripts/notify.sh\" codex", "timeout": 5 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"$HOME/.tmux/plugins/pane-notify/scripts/notify.sh\" codex", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
