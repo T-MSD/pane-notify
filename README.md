@@ -9,7 +9,8 @@ stops to wait for input or permission, pane-notify:
   command succeeded, red when it failed, yellow when Claude is waiting;
 - shows a **bell** in the status bar until you have seen every notification;
 - keeps a **sidebar** you can open with `prefix + a`, listing what happened
-  where; click an entry to jump to its window;
+  where; click an entry, or select it with the arrow keys and press Enter, to
+  jump to its window;
 - sends a **desktop notification** when your terminal is not focused.
 
 Nothing is reported for the window you are looking at. A badge and its entry
@@ -88,15 +89,31 @@ when you send a prompt (`UserPromptSubmit`).
 
 | | |
 |---|---|
-| `prefix + a` | Open or close the sidebar. |
+| `prefix + a` | Open the sidebar and focus it, or close it. |
 | Click an entry | Open its window and remove the entry. |
+| `↑`, `↓` in the sidebar | Select an entry. |
+| `Enter` in the sidebar | Open the selected entry's window and remove the entry. |
+| `x` in the sidebar | Remove the selected entry. |
 | `q`, Ctrl-C in the sidebar | Close the sidebar. |
 
 The sidebar is a 30-column split on the right of the window you are looking
 at, and follows you between windows. It closes by itself when nothing is left.
 
-Entries stay until you open their window, click them, or the window closes. A
-newer notification from the same window replaces the older one.
+While the sidebar is the focused pane, the selected entry is highlighted. By
+default the highlight is a shade of your terminal's background, lighter on a
+dark theme and darker on a light one, so it shows on any colour scheme. The
+sidebar asks the terminal for its background (OSC 11), which tmux answers from
+the pane's style or, on tmux 3.4+, from the terminal itself. When nothing
+answers, the highlight falls back to reverse video. Set
+`@pane-notify-sidebar-selected` to a colour to choose it yourself.
+
+The highlight follows pane focus only with `set -g focus-events on`; without
+it, it appears at the first arrow key and stays until the sidebar is next
+redrawn.
+
+Entries stay until you open their window, click them, remove them, or the
+window closes. A newer notification from the same window replaces the older
+one.
 
 ## Options
 
@@ -116,6 +133,7 @@ colour (`red`, `brightblack`, `colour208`, `#ff5050`) or a format such as
 | `@pane-notify-sidebar-subtle` | `default` | Sidebar: what happened. |
 | `@pane-notify-sidebar-muted` | `brightblack` | Sidebar: the command line. |
 | `@pane-notify-sidebar-rule` | `brightblack` | Sidebar: its left edge when floating. |
+| `@pane-notify-sidebar-selected` | `auto` | Sidebar: background of the selected entry; `auto` shades the terminal's background. |
 | `@pane-notify-sidebar-width` | `30` | Sidebar width, at most a third of the window. |
 | `@pane-notify-bar-max` | `10` | Notifications kept at once. |
 | `@pane-notify-key` | `a` | Prefix key for the sidebar; `off` for none. |

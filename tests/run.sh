@@ -16,6 +16,10 @@ RUN=0
 IN="pn-test-$$-0" OUT="pn-outer-$$-0"
 VERBOSE=${1:-}
 RESULTS="$WORK/results"
+OUTER_BG='#20242c'
+TMUX_VERSION="$(tmux -V | sed -E 's/^tmux (next-)?//; s/^([0-9]+)\.([0-9]+).*/\1 \2/' | awk '{ print $1 * 100 + $2 }')"
+REVERSE=$'\e\\[7m'
+if [ "$TMUX_VERSION" -ge 304 ]; then HL='48;2;72;75;81m'; else HL=$REVERSE; fi
 
 T() { tmux -L "$IN" "$@"; }
 O() { tmux -L "$OUT" "$@"; }
@@ -44,6 +48,16 @@ wait_for() {
     sleep 0.1
   done
   return 1
+}
+
+eventually() {
+  local i v
+  for ((i = 0; i < 50; i++)); do
+    v="$(eval "$1")"
+    [ "$v" = "$2" ] && break
+    sleep 0.1
+  done
+  printf '%s' "$v"
 }
 
 section() { printf '\n%s\n' "$1"; }
@@ -84,7 +98,11 @@ setup() {
   T run-shell "'$ROOT/pane-notify.tmux'"
   local i
   for i in 1 2 3 4 5; do T new-window -d -t "a:$i" -n "w$i"; done
-  O -f /dev/null new-session -d -s o -x 120 -y 32 "TMUX= tmux -L $IN attach -t a:0"
+  if [ -n "$OUTER_BG" ]; then
+    O -f /dev/null new-session -d -s o -x 120 -y 32 "TMUX= tmux -L $IN attach -t a:0" \; set -g window-style "bg=$OUTER_BG"
+  else
+    O -f /dev/null new-session -d -s o -x 120 -y 32 "TMUX= tmux -L $IN attach -t a:0"
+  fi
   O set -g status off
   O pipe-pane -O -t o "cat >> '$WORK/out.raw'"
   wait_for '[ -n "$(T list-clients)" ]' || { echo "inner client did not attach"; exit 1; }
@@ -110,12 +128,28 @@ section "functions"
   expect "wrap splits long words" "$(wrap 'abcdefghijkl' 5 | tr '\n' '|')" "abcde|fghij|kl|"
   expect "human_duration" "$(human_duration 59) $(human_duration 61) $(human_duration 3700)" "59s 1m01s 1h01m"
   expect "decode: R redraws" "$(printf 'R' | sidebar_decode)" redraw
-  expect "decode: arrow then q quits" "$(printf '\e[Aq' | sidebar_decode)" quit
+  expect "sgr background hex" "$(sgr '#303030' bg | od -An -c | tr -d ' \n')" '033[48;2;48;48;48m'
+  expect "sgr background name" "$(sgr brightred bg | od -An -c | tr -d ' \n')" '033[101m'
+  expect "sgr background colourN" "$(sgr colour236 bg | od -An -c | tr -d ' \n')" '033[48;5;236m'
+  expect "decode: up and down arrows" "$(printf '\e[A\e[B' | { sidebar_decode; sidebar_decode; } | tr '\n' ' ')" "up down "
+  expect "decode: other sequences are skipped" "$(printf '\e[Cq' | sidebar_decode)" quit
+  expect "decode: Enter opens" "$(printf '\r\n' | { sidebar_decode; sidebar_decode; } | tr '\n' ' ')" "open open "
+  expect "decode: x removes" "$(printf 'x' | sidebar_decode)" remove
+  expect "shade lightens a dark background" "$(shade rgb:2020/2424/2c2c)" '#484b51'
+  expect "shade lightens a grey one" "$(shade rgb:3c3c/3c3c/3c3c)" '#5f5f5f'
+  expect "shade darkens a light one" "$(shade rgb:fafa/fafa/fafa)" '#d5d5d5'
+  expect "shade takes short channels" "$(shade rgb:0/0/0)" '#2d2d2d'
+  expect "shade rejects other formats" "$(shade '#ffffff' || echo rejected)" rejected
+  expect "decode: OSC 11 reply with ST" "$(printf '\e]11;rgb:2020/2424/2c2c\e\\' | sidebar_decode)" "bg rgb:2020/2424/2c2c"
+  expect "decode: OSC 11 reply with BEL" "$(printf '\e]11;rgb:ff/ff/ff\aq' | { sidebar_decode; sidebar_decode; } | tr '\n' ' ')" "bg rgb:ff/ff/ff quit "
+  expect "decode: DA1 reply" "$(printf '\e[?1;2c' | sidebar_decode)" "bg da"
+  expect "decode: other OSC replies are skipped" "$(printf '\e]10;rgb:0/0/0\aq' | sidebar_decode)" quit
+  expect "decode: focus changes redraw" "$(printf '\e[I\e[O' | { sidebar_decode; sidebar_decode; } | tr '\n' ' ')" "redraw redraw "
   expect "decode: lone Esc keeps the key" "$(printf '\eq' | sidebar_decode)" quit
   expect "decode: left click" "$(printf '\e[<0;5;3M' | sidebar_decode)" "click 3"
   expect "decode: release is ignored" "$(printf '\e[<0;5;1m' | sidebar_decode)" ""
   expect "decode: right click is ignored" "$(printf '\e[<2;5;3M' | sidebar_decode)" ""
-  expect "decode: other keys are ignored" "$(printf 'x\n' | sidebar_decode)" ""
+  expect "decode: other keys are ignored" "$(printf 'zy' | sidebar_decode)" ""
   expect "decode: one event per call" "$(printf 'Rq' | { sidebar_decode; sidebar_decode; } | tr '\n' ' ')" "redraw quit "
 )
 
@@ -245,15 +279,15 @@ toggle
 wait_for '[ -n "$(sidebar_in a:0)" ] && [ "$(drawn "$(sidebar_in a:0)")" = 2 ]'
 sb="$(sidebar_in a:0)"
 expect "opens as a split in the viewed window" "$(T display -p -t "$sb" '#{?pane_floating_flag,1,0} #{pane_width}')" "0 30"
-expect "lists both entries" "$(drawn "$sb")" 2
+expect "lists both entries" "$(eventually 'drawn "$sb"' 2)" 2
 T send-keys -t "$sb" Up
 notify a:3 process 0 12 three
 wait_for '[ "$(drawn "$sb")" = 3 ]'
-expect "redraws after an arrow key" "$(drawn "$sb")" 3
+expect "redraws after an arrow key" "$(eventually 'drawn "$sb"' 3)" 3
 T send-keys -t "$sb" Escape
 notify a:4 process 0 12 four
 wait_for '[ "$(drawn "$sb")" = 4 ]'
-expect "redraws after a lone Esc" "$(drawn "$sb")" 4
+expect "redraws after a lone Esc" "$(eventually 'drawn "$sb"' 4)" 4
 O send-keys -t o -l $'\e[<0;95;2M'
 wait_for '[ "$(client_window)" = w4 ]'
 expect "clicking an entry opens its window" "$(client_window)" w4
@@ -261,6 +295,7 @@ wait_for '[ "$(count)" = 3 ]'
 expect "and removes the entry" "$(count)" 3
 wait_for '[ -n "$(sidebar_in a:4)" ] && [ -z "$(sidebar_in a:0)" ]'
 expect "the sidebar follows to the new window" "$([ -n "$(sidebar_in a:4)" ] && [ -z "$(sidebar_in a:0)" ] && echo yes)" yes
+expect "without taking the focus" "$(T display -p -t a:4 '#{@pane_notify_sidebar}')" ""
 
 settled() { wait_for '[ -n "$(sidebars)" ] && [ "$(drawn "$(sidebars)")" -gt 0 ]'; sleep 0.8; }
 
@@ -286,6 +321,107 @@ toggle
 wait_for '[ -z "$(sidebars)" ]'
 sleep 0.5
 expect "the key closes it without a render" "$(wc -l < "$WORK/renders" | tr -d ' ')" 0
+
+section "sidebar keys"
+highlighted() { T capture-pane -e -p -t "$1" | grep -a "${2:-$HL}" | grep -ao 'w[0-9]' | tr '\n' ' ' | sed 's/ $//'; }
+setup
+notify a:1 process 0 12 one
+notify a:2 process 0 12 two
+notify a:3 process 0 12 three
+toggle
+wait_for '[ -n "$(sidebar_in a:0)" ] && [ "$(drawn "$(sidebar_in a:0)")" = 3 ]'
+sb="$(sidebar_in a:0)"
+expect "opening the sidebar focuses it" "$(T display -p -t a:0 '#{pane_id}')" "$sb"
+wait_for '[ "$(highlighted "$sb")" = w3 ]'
+expect "and highlights the newest entry" "$(eventually 'highlighted "$sb"' w3)" w3
+T select-pane -t a:0.0
+wait_for '[ -z "$(highlighted "$sb")" ]'
+expect "nothing is highlighted while another pane is focused" "$(eventually 'highlighted "$sb"' "")" ""
+T select-pane -t "$sb"
+wait_for '[ "$(highlighted "$sb")" = w3 ]'
+expect "focusing the sidebar highlights the selection again" "$(eventually 'highlighted "$sb"' w3)" w3
+T send-keys -t "$sb" Up
+sleep 0.3
+expect "Up stops at the first entry" "$(eventually 'highlighted "$sb"' w3)" w3
+T send-keys -t "$sb" Down
+wait_for '[ "$(highlighted "$sb")" = w2 ]'
+expect "Down selects the next entry" "$(eventually 'highlighted "$sb"' w2)" w2
+T send-keys -t "$sb" Down Down
+wait_for '[ "$(highlighted "$sb")" = w1 ]'
+sleep 0.3
+expect "Down stops at the last entry" "$(eventually 'highlighted "$sb"' w1)" w1
+T send-keys -t "$sb" Up
+wait_for '[ "$(highlighted "$sb")" = w2 ]'
+expect "Up selects the previous entry" "$(eventually 'highlighted "$sb"' w2)" w2
+notify a:2 process 0 12 two-again
+wait_for '[ "$(T capture-pane -p -t "$sb" | grep -c two-again)" = 1 ]'
+expect "the selection stays on a window that notifies again" "$(eventually 'highlighted "$sb"' w2)" w2
+T send-keys -t "$sb" x
+wait_for '[ "$(count)" = 2 ] && [ "$(drawn "$sb")" = 2 ]'
+expect "x removes the selected entry" "$(count)|$(T show -wqv -t a:2 @pane_notify)|$(client_window)" "2||main"
+wait_for '[ "$(highlighted "$sb")" = w3 ]'
+expect "and selects the entry below it" "$(eventually 'highlighted "$sb"' w3)" w3
+T select-pane -t a:0.0
+wait_for '[ -z "$(highlighted "$sb")" ]'
+expect "leaving the sidebar hides the highlight" "$(eventually 'highlighted "$sb"' "")" ""
+T select-pane -t "$sb"
+wait_for '[ "$(highlighted "$sb")" = w3 ]'
+expect "and coming back keeps the selection" "$(eventually 'highlighted "$sb"' w3)" w3
+T send-keys -t "$sb" Enter
+wait_for '[ "$(client_window)" = w3 ]'
+expect "Enter opens the selected entry's window" "$(client_window)" w3
+wait_for '[ "$(count)" = 1 ]'
+expect "and removes the entry" "$(count)" 1
+expect "and leaves the sidebar unfocused in the old window" "$(T display -p -t a:0.0 '#{pane_active}')" 1
+
+if [ "$TMUX_VERSION" -ge 304 ]; then
+  expect "the highlight is a shade of the terminal's background" "$(T show -gqv @pane_notify_selected_bg)" '#484b51'
+else
+  skipped "the highlight is a shade of the terminal's background" "tmux < 3.4 does not report it"
+fi
+
+setup
+notify a:1 process 0 12 one
+notify a:2 process 0 12 two
+notify a:3 process 0 12 three
+toggle
+wait_for '[ "$(highlighted "$(sidebar_in a:0)")" = w3 ]'
+T send-keys -t "$(sidebar_in a:0)" x x
+wait_for '[ "$(count)" = 1 ]'
+sleep 0.5
+expect "x pressed twice in a row removes two entries" "$(count)|$(T show -wqv -t a:1 @pane_notify)" "1|done"
+setup "@pane-notify-sidebar-selected '#405060'"
+notify a:1 process 0 12 one
+toggle
+wait_for '[ "$(highlighted "$(sidebar_in a:0)" "48;2;64;80;96m")" = w1 ]'
+expect "the highlight colour is an option" "$(eventually 'highlighted "$(sidebar_in a:0)" "48;2;64;80;96m"' w1)" w1
+
+setup "@pane-notify-sidebar-selected '#abc'"
+notify a:1 process 0 12 one
+toggle
+expect "an unreadable highlight colour falls back to reverse video" \
+  "$(eventually 'highlighted "$(sidebar_in a:0)" "$REVERSE"' w1)" w1
+
+OUTER_BG=""
+setup
+notify a:1 process 0 12 one
+toggle
+wait_for '[ "$(highlighted "$(sidebar_in a:0)" "$REVERSE")" = w1 ]'
+expect "without a known background it uses reverse video" "$(eventually 'highlighted "$(sidebar_in a:0)" "$REVERSE"' w1)" w1
+toggle
+wait_for '[ -z "$(sidebars)" ]'
+T set -g window-style 'bg=#123456'
+toggle
+wait_for '[ "$(highlighted "$(sidebar_in a:0)" "48;2;60;88;116m")" = w1 ]'
+expect "a pane style's background is shaded" "$(T show -gqv @pane_notify_selected_bg)" '#3c5874'
+toggle
+wait_for '[ -z "$(sidebars)" ]'
+T set -gu window-style
+toggle
+wait_for '[ "$(highlighted "$(sidebar_in a:0)" "$REVERSE")" = w1 ]'
+expect "and once nothing reports one, reverse video comes back" \
+  "$(highlighted "$(sidebar_in a:0)" "$REVERSE")|$(T show -gqv @pane_notify_selected_bg)" "w1|"
+OUTER_BG='#20242c'
 
 section "pane widths after the sidebar closes"
 widths() { T list-panes -t a:0 -F '#{pane_width}' | tr '\n' ' ' | sed 's/ $//'; }
@@ -334,6 +470,15 @@ T kill-pane -t a:0.0
 wait_for '[ "$(T list-windows -t a -F "#{window_name}" | grep -c main)" = 0 ]'
 expect "a window left with only its sidebar closes" "$(T list-windows -t a -F '#{window_name}' | grep -c main)" 0
 expect "busy flag never left set" "$(T show -gqv @pane_notify_busy)" ""
+if [ "$(T show -gqv @pane_notify_floating)" = 1 ]; then
+  setup
+  notify a:1 process 0 12 one
+  T split-window -d -h -t a:0 \; resize-pane -Z -t a:0.0
+  toggle
+  settle_kind 11
+  expect "opening it in a zoomed window keeps the zoom" "$(T display -p -t a:0 '#{window_zoomed_flag}')" 1
+  expect "and focuses the floating sidebar" "$(T display -p -t a:0 '#{pane_id}')" "$(sidebar_in a:0)"
+fi
 
 section "Claude Code hooks"
 if command -v jq >/dev/null; then
