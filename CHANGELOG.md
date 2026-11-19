@@ -16,3 +16,5 @@ First release.
 - Closing the sidebar restores the widths of the window's columns.
 - Desktop notifications over OSC 9, OSC 777 or OSC 99.
 - Claude Code hooks shipped as a Claude Code plugin.
+- Codex CLI hooks (`Stop`, `PermissionRequest`, `UserPromptSubmit`), with an
+  example `~/.codex/hooks.json`.

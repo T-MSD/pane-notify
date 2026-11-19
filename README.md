@@ -2,11 +2,12 @@
 
 Know when something in another tmux window needs you.
 
-When a long-running command finishes, or [Claude Code](https://claude.com/claude-code)
+When a long-running command finishes, or a coding agent
+([Claude Code](https://claude.com/claude-code), [Codex CLI](https://developers.openai.com/codex))
 stops to wait for input or permission, pane-notify:
 
 - puts a coloured **badge** (●) on that window in the status bar: green when a
-  command succeeded, red when it failed, yellow when Claude is waiting;
+  command succeeded, red when it failed, yellow when an agent is waiting;
 - shows a **bell** in the status bar until you have seen every notification;
 - keeps a **sidebar** you can open with `prefix + a`, listing what happened
   where; click an entry, or select it with the arrow keys and press Enter, to
@@ -21,7 +22,7 @@ clear as soon as you open the window.
 - tmux 3.2 or later. In zoomed windows the sidebar floats above the zoomed
   pane on tmux 3.8+; on older versions it stays hidden until you unzoom.
 - bash 3.2 or later (for the scripts; your shell can be zsh or bash).
-- `jq`, for the Claude Code hooks.
+- `jq`, for the Claude Code and Codex CLI hooks.
 
 ## Install
 
@@ -85,6 +86,21 @@ Claude Code has to run inside tmux. The hooks fire when Claude finishes a turn
 (`Stop`), asks for permission or input (`Notification`), and clear the window
 when you send a prompt (`UserPromptSubmit`).
 
+### Codex CLI
+
+Copy [`examples/codex-hooks.json`](examples/codex-hooks.json) to
+`~/.codex/hooks.json`, or merge its `hooks` into the one you have. Then run
+`/hooks` in Codex and trust them: Codex skips hooks it has not been told to
+trust, and again after they change.
+
+Codex has to run inside tmux. The hooks fire when Codex finishes a turn
+(`Stop`), asks for approval (`PermissionRequest`), and clear the window when you
+send a prompt (`UserPromptSubmit`).
+
+Codex can send its own desktop notifications (`tui.notifications` in
+`~/.codex/config.toml`). Turn them off, or `@pane-notify-desktop off`, to avoid
+getting two.
+
 ## Usage
 
 | | |
@@ -125,7 +141,7 @@ colour (`red`, `brightblack`, `colour208`, `#ff5050`) or a format such as
 |---|---|---|
 | `@pane-notify-color-done` | `green` | Badge colour for a command that succeeded. |
 | `@pane-notify-color-failed` | `red` | Badge colour for a command that failed. |
-| `@pane-notify-color-waiting` | `yellow` | Badge colour for Claude waiting. |
+| `@pane-notify-color-waiting` | `yellow` | Badge colour for an agent waiting. |
 | `@pane-notify-icon-done`, `-failed`, `-waiting` | `●` | Badge glyphs. |
 | `@pane-notify-color-status` | `yellow` | Bell colour. |
 | `@pane-notify-icon-status` | `🔔 ` | Bell glyph, including any spacing after it. |
@@ -211,8 +227,9 @@ With `osc777` and `osc99` the window name is sent as the title.
 - **No desktop notification:** your terminal may not support the protocol, it
   was focused (`@pane-notify-desktop always` to test), the terminal lacks
   notification permission, or Do Not Disturb / Focus is on.
-- **Nothing from Claude Code:** check that `jq` is installed and Claude Code is
-  running inside tmux.
+- **Nothing from Claude Code or Codex:** check that `jq` is installed and the
+  agent is running inside tmux. For Codex, check `/hooks` lists the hooks as
+  trusted.
 
 ## Development
 
@@ -221,7 +238,7 @@ tests/run.sh
 ```
 
 The tests start private tmux servers (`tmux -L`), so they never touch yours.
-They need zsh and jq for the shell and Claude Code sections, which are
+They need zsh and jq for the shell and agent hook sections, which are
 skipped otherwise. CI runs them on tmux 3.2a, 3.4 and the latest release, plus
 `shellcheck`.
 

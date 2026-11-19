@@ -494,6 +494,29 @@ else
   skipped "Claude Code hooks" "jq not installed"
 fi
 
+section "Codex CLI hooks"
+if command -v jq >/dev/null; then
+  setup
+  echo '{"hook_event_name":"Stop","last_assistant_message":"done"}' | notify a:2 codex
+  expect "Stop adds a waiting entry" "$(T show -wqv -t a:2 @pane_notify) $(count)" "waiting 1"
+  expect "Stop names Codex" "$(T show -gv @pane_notify_entry_1 | field 3)" "Codex is waiting for input"
+  echo '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build","description":"Remove the build directory"}}' \
+    | notify a:3 codex
+  expect "PermissionRequest asks for approval" "$(T show -gv @pane_notify_entry_2 | field 3)" "Codex needs your approval"
+  expect "PermissionRequest shows the tool description" "$(T show -gv @pane_notify_entry_2 | field 4)" \
+    "Remove the build directory"
+  echo '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls"}}' | notify a:4 codex
+  expect "PermissionRequest falls back to the tool name" "$(T show -gv @pane_notify_entry_3 | field 4)" "Bash"
+  echo '{"hook_event_name":"UserPromptSubmit","prompt":"next"}' | notify a:2 codex
+  expect "UserPromptSubmit clears the window" "$(T show -wqv -t a:2 @pane_notify) $(count)" " 2"
+  expect "hooks print nothing" "$(echo '{"hook_event_name":"Stop"}' | notify a:2 codex)" ""
+  setup
+  echo '{"hook_event_name":"Stop"}' | notify a:2 nope
+  expect "an unknown agent is ignored" "$(entries)" 0
+else
+  skipped "Codex CLI hooks" "jq not installed"
+fi
+
 section "lock"
 setup
 (
