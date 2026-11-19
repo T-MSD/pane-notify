@@ -3,7 +3,8 @@
 Know when something in another tmux window needs you.
 
 When a long-running command finishes, or a coding agent
-([Claude Code](https://claude.com/claude-code), [Codex CLI](https://developers.openai.com/codex))
+([Claude Code](https://claude.com/claude-code), [Codex CLI](https://developers.openai.com/codex),
+[opencode](https://opencode.ai))
 stops to wait for input or permission, pane-notify:
 
 - puts a coloured **badge** (●) on that window in the status bar: green when a
@@ -22,7 +23,7 @@ clear as soon as you open the window.
 - tmux 3.2 or later. In zoomed windows the sidebar floats above the zoomed
   pane on tmux 3.8+; on older versions it stays hidden until you unzoom.
 - bash 3.2 or later (for the scripts; your shell can be zsh or bash).
-- `jq`, for the Claude Code and Codex CLI hooks.
+- `jq`, for the Claude Code and Codex CLI hooks and the opencode plugin.
 
 ## Install
 
@@ -100,6 +101,21 @@ send a prompt (`UserPromptSubmit`).
 Codex can send its own desktop notifications (`tui.notifications` in
 `~/.codex/config.toml`). Turn them off, or `@pane-notify-desktop off`, to avoid
 getting two.
+
+### opencode
+
+Link the plugin into opencode's global plugin directory:
+
+```sh
+mkdir -p ~/.config/opencode/plugins
+ln -s ~/.tmux/plugins/pane-notify/opencode/pane-notify.js ~/.config/opencode/plugins/
+```
+
+opencode has to run inside tmux. The plugin notifies when a session finishes a
+turn (`session.status` going from busy to idle), asks for permission
+(`permission.asked`, or `permission.updated` on older opencode) or asks a
+question (`question.asked`), and clears the window when you send a prompt
+(`chat.message`). Subagents finishing or starting are ignored.
 
 ## Usage
 
@@ -227,9 +243,11 @@ With `osc777` and `osc99` the window name is sent as the title.
 - **No desktop notification:** your terminal may not support the protocol, it
   was focused (`@pane-notify-desktop always` to test), the terminal lacks
   notification permission, or Do Not Disturb / Focus is on.
-- **Nothing from Claude Code or Codex:** check that `jq` is installed and the
-  agent is running inside tmux. For Codex, check `/hooks` lists the hooks as
-  trusted.
+- **Nothing from Claude Code, Codex or opencode:** check that `jq` is installed
+  and the agent is running inside tmux. For Codex, check `/hooks` lists the
+  hooks as trusted. For opencode, check the link in
+  `~/.config/opencode/plugins/` resolves; a server started outside tmux and
+  reached with `opencode attach` cannot notify.
 
 ## Development
 
@@ -238,9 +256,9 @@ tests/run.sh
 ```
 
 The tests start private tmux servers (`tmux -L`), so they never touch yours.
-They need zsh and jq for the shell and agent hook sections, which are
-skipped otherwise. CI runs them on tmux 3.2a, 3.4 and the latest release, plus
-`shellcheck`.
+They need zsh, jq and node for the shell, agent hook and opencode plugin
+sections, which are skipped otherwise. CI runs them on tmux 3.2a, 3.4 and the
+latest release, plus `shellcheck`.
 
 ## License
 

@@ -65,6 +65,21 @@ section() { printf '\n%s\n' "$1"; }
 sock() { T display -p '#{socket_path}'; }
 pane_of() { T display -p -t "$1" '#{pane_id}'; }
 notify() { TMUX="$(sock),1,0" TMUX_PANE="$(pane_of "$1")" bash "$N" "${@:2}"; }
+opencode_plugin() {
+  local env=(TMUX= TMUX_PANE=)
+  [ -z "$1" ] || env=(TMUX="$(sock),1,0" TMUX_PANE="$(pane_of "$1")")
+  env "${env[@]}" node --input-type=module -e "
+    const { PaneNotify } = await import('$ROOT/opencode/pane-notify.js');
+    const sessions = { child: { id: 'child', parentID: 's1' } };
+    const client = { session: { get: async ({ path }) => {
+      if (path.id === 'broken') throw new Error('unreachable');
+      return { data: sessions[path.id] ?? { id: path.id } };
+    } } };
+    const hooks = await PaneNotify({ client });
+    const status = (sessionID, type) =>
+      hooks.event({ event: { type: 'session.status', properties: { sessionID, status: { type } } } });
+    $2"
+}
 toggle() { T run-shell "'$N' sidebar-toggle"; }
 count() { T show -gqv @pane_notify_count; }
 entries() { T show -g | grep -ac '^@pane_notify_entry_'; }
@@ -517,6 +532,43 @@ if command -v jq >/dev/null; then
   expect "an unknown agent is ignored" "$(entries)" 0
 else
   skipped "Codex CLI hooks" "jq not installed"
+fi
+
+section "opencode plugin"
+if ! command -v jq >/dev/null; then
+  skipped "opencode plugin" "jq not installed"
+elif ! command -v node >/dev/null; then
+  skipped "opencode plugin" "node not installed"
+else
+  setup
+  opencode_plugin a:2 "await status('s1', 'busy'); await status('s1', 'idle');"
+  expect "a finished turn adds a waiting entry" "$(T show -wqv -t a:2 @pane_notify) $(count)" "waiting 1"
+  expect "and names opencode" "$(T show -gv @pane_notify_entry_1 | field 3)" "opencode is waiting for input"
+  opencode_plugin a:3 "await status('s1', 'idle');"
+  expect "idle without a turn is ignored" "$(entries)" 1
+  opencode_plugin a:3 "await status('s1', 'busy'); await status('s1', 'idle'); await status('s1', 'idle');"
+  expect "idle twice after one turn notifies once" "$(T show -gqv @pane_notify_seq)" 2
+  opencode_plugin a:4 "await hooks.event({ event: { type: 'permission.asked', properties: {
+    sessionID: 's1', permission: 'bash', patterns: ['git push'] } } });"
+  expect "permission.asked asks for approval" "$(T show -gv @pane_notify_entry_3 | field 3)" "opencode needs your approval"
+  expect "permission.asked shows the patterns" "$(T show -gv @pane_notify_entry_3 | field 4)" "git push"
+  opencode_plugin a:4 "await hooks.event({ event: { type: 'permission.updated', properties: {
+    sessionID: 's1', type: 'bash', title: 'Run git push' } } });"
+  expect "permission.updated shows the title" "$(T show -gv @pane_notify_entry_4 | field 4)" "Run git push"
+  opencode_plugin a:3 "await hooks.event({ event: { type: 'question.asked', properties: {
+    sessionID: 's1', questions: [{ question: 'Which database?', header: 'Database', options: [] }] } } });"
+  expect "question.asked shows the question" "$(T show -gv @pane_notify_entry_5 | field 3)" "Which database?"
+  opencode_plugin a:2 "await hooks['chat.message']({ sessionID: 's1' }, {});"
+  expect "chat.message clears the window" "$(T show -wqv -t a:2 @pane_notify) $(count)" " 2"
+  opencode_plugin a:3 "await hooks['chat.message']({ sessionID: 'child' }, {});"
+  expect "a subagent's prompt does not clear it" "$(T show -wqv -t a:3 @pane_notify) $(count)" "waiting 2"
+  setup
+  opencode_plugin a:2 "await status('child', 'busy'); await status('child', 'idle');"
+  expect "a subagent finishing is ignored" "$(entries)" 0
+  opencode_plugin "" "await status('s1', 'busy'); await status('s1', 'idle');"
+  expect "outside tmux it does nothing" "$? $(entries)" "0 0"
+  opencode_plugin a:2 "await status('broken', 'busy'); await status('broken', 'idle');"
+  expect "a failed session lookup still notifies" "$(entries)" 1
 fi
 
 section "lock"

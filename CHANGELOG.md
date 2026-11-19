@@ -18,3 +18,6 @@ First release.
 - Claude Code hooks shipped as a Claude Code plugin.
 - Codex CLI hooks (`Stop`, `PermissionRequest`, `UserPromptSubmit`), with an
   example `~/.codex/hooks.json`.
+- opencode plugin: notifies when a session finishes a turn, asks for
+  permission (`permission.asked`, or `permission.updated` on older opencode)
+  or asks a question, clears the window on a prompt, and ignores subagents.
