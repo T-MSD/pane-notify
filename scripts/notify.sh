@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #   notify.sh process <exit-status> <seconds> <command>   (shell hooks)
-#   notify.sh claude|codex                                (agent hooks, JSON on stdin)
+#   notify.sh claude|codex|opencode                       (agent hooks, JSON on stdin)
 #   notify.sh bar-refresh                                 (tmux hooks)
 #   notify.sh sidebar-toggle [client]                     (key binding)
 #   notify.sh sidebar                                     (runs inside the sidebar pane)
@@ -675,8 +675,9 @@ desktop_notify() {
 
 agent_label() {
   case "$1" in
-    claude) echo Claude ;;
-    codex)  echo Codex ;;
+    claude)   echo Claude ;;
+    codex)    echo Codex ;;
+    opencode) echo opencode ;;
   esac
 }
 
