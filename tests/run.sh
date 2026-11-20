@@ -73,6 +73,7 @@ opencode_plugin() {
     const sessions = { child: { id: 'child', parentID: 's1' } };
     const client = { session: { get: async ({ path }) => {
       if (path.id === 'broken') throw new Error('unreachable');
+      if (path.id === 'missing') return { error: { name: 'NotFoundError' } };
       return { data: sessions[path.id] ?? { id: path.id } };
     } } };
     const hooks = await PaneNotify({ client });
@@ -569,6 +570,8 @@ else
   expect "outside tmux it does nothing" "$? $(entries)" "0 0"
   opencode_plugin a:2 "await status('broken', 'busy'); await status('broken', 'idle');"
   expect "a failed session lookup still notifies" "$(entries)" 1
+  opencode_plugin a:3 "await status('missing', 'busy'); await status('missing', 'idle');"
+  expect "a lookup returning an error still notifies" "$(entries)" 2
 fi
 
 section "lock"

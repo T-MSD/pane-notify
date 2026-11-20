@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 const script = join(dirname(realpathSync(fileURLToPath(import.meta.url))), "..", "scripts", "notify.sh");
 
 function send(hook) {
-  const child = spawn(script, ["opencode"], { stdio: ["pipe", "ignore", "ignore"] });
-  child.on("error", () => {});
-  child.stdin.on("error", () => {});
-  child.stdin.end(JSON.stringify(hook));
+  try {
+    const child = spawn(script, ["opencode"], { stdio: ["pipe", "ignore", "ignore"] });
+    child.on("error", () => {});
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify(hook));
+  } catch {}
 }
 
 export const PaneNotify = async ({ client }) => {
